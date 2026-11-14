@@ -45,6 +45,8 @@ func dispatch(args []string) int {
 			return cmdNew(p, args[1:])
 		case "resume":
 			return cmdResume(p, args[1:])
+		case "switch":
+			return cmdSwitch(p, args[1:])
 		case "project":
 			return cmdProject(p, args[1:])
 		}

@@ -447,26 +447,30 @@ func (w *wrapper) run(acct accounts.Account, resume bool) int {
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGUSR1)
 	defer signal.Stop(sigs)
 
-	cmd := w.command(acct, resume)
-	if err := cmd.Start(); err != nil {
+	l := &live{}
+	if err := w.start(l, acct, resume); err != nil {
 		w.finish()
 		return r.errf("cannot start %s: %v", r.P.ClaudeBin, err)
 	}
-	done := waitChan(cmd)
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 
 	for {
 		select {
-		case err := <-done:
+		case err := <-l.done:
+			if w.fallBack(l, err) {
+				continue
+			}
 			w.finish()
 			return exitCode(err)
 		case s := <-sigs:
 			if s == syscall.SIGUSR1 {
+				w.maybeSwitch(l)
 				continue
 			}
-			_ = cmd.Process.Signal(s)
+			_ = l.cmd.Process.Signal(s)
 		case <-tick.C:
+			w.maybeSwitch(l)
 		}
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -30,6 +31,8 @@ func TestMain(m *testing.M) {
 	if out, err := exec.Command("go", "build", "-o", csBin, "claude-sessions/cmd/cs").CombinedOutput(); err != nil {
 		panic(fmt.Sprintf("build cs: %v\n%s", err, out))
 	}
+	// Tests stop sessions with SIGTERM to this process; never let it kill the test binary.
+	signal.Notify(make(chan os.Signal, 1), syscall.SIGTERM)
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)
