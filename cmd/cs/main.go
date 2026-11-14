@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"claude-sessions/internal/paths"
+	"claude-sessions/internal/report"
 )
 
 const version = "0.1.0"
@@ -34,6 +35,12 @@ func run(args []string) int {
 		switch args[0] {
 		case "account":
 			return cmdAccount(p, args[1:])
+		case "report":
+			// Runs inside sessions: never fail, never print errors.
+			if len(args) > 1 {
+				report.Handle(p, args[1], os.Stdin, os.Stdout, os.Getenv)
+			}
+			return 0
 		case "project":
 			return cmdProject(p, args[1:])
 		}
