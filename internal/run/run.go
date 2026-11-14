@@ -508,6 +508,9 @@ func (w *wrapper) run(acct accounts.Account, resume bool) int {
 				w.maybeSwitch(l)
 				continue
 			}
+			// SIGTERM or SIGHUP: the terminal is closing. Pass it on and
+			// stop treating exits as something to recover from.
+			l.closing = true
 			_ = l.cmd.Process.Signal(s)
 		case <-tick.C:
 			w.maybeSwitch(l)

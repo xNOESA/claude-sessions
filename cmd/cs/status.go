@@ -6,10 +6,11 @@ import (
 
 	"claude-sessions/internal/dash"
 	"claude-sessions/internal/paths"
+	"claude-sessions/internal/usage"
 )
 
 func cmdStatus(p paths.Paths, args []string) int {
-	var once, asJSON, all bool
+	var once, asJSON, all, noRefresh bool
 	for _, a := range args {
 		switch a {
 		case "--once":
@@ -18,9 +19,20 @@ func cmdStatus(p paths.Paths, args []string) int {
 			asJSON = true
 		case "--all":
 			all = true
+		case "--no-refresh":
+			noRefresh = true
 		default:
-			return fail("usage: cs status [--once] [--json] [--all]")
+			return fail("usage: cs status [--once] [--json] [--all] [--no-refresh]")
 		}
+	}
+	// Ask Claude Code for any account usage older than a few minutes.
+	refresh := func() { usage.RefreshStale(p, time.Now(), usage.MaxAge) }
+	if noRefresh {
+		refresh = nil
+	}
+	live := !asJSON && !once && dash.IsTerminal(os.Stdout)
+	if !live && refresh != nil {
+		refresh()
 	}
 	switch {
 	case asJSON:
@@ -31,7 +43,7 @@ func cmdStatus(p paths.Paths, args []string) int {
 	case once || !dash.IsTerminal(os.Stdout):
 		dash.Once(p, os.Stdout, all)
 	default:
-		dash.Watch(p, os.Stdout, all)
+		dash.Watch(p, os.Stdout, all, refresh)
 	}
 	return 0
 }

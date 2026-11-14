@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unicode"
@@ -44,10 +45,23 @@ type Row struct {
 	NotAllowed                                    bool
 }
 
-// AccountRow is one registered account's last-known usage.
+// Bar is one usage meter under an account: a limit window or extra spend.
+type Bar struct {
+	Label  string
+	Pct    float64
+	Level  int    // 0 normal, 1 amber, 2 red
+	Detail string // when it resets, or the amounts
+}
+
+// AccountRow is one registered account and its usage.
 type AccountRow struct {
-	Name, Label, FiveHour, Week, Resets string
-	Level                               int
+	Name, Label, Org, Plan string
+	Seen                   string // how long ago the usage was read, e.g. "4m ago"
+	FiveHour, Week, Resets string
+	Level                  int
+	Active                 int    // running sessions on this account
+	Note                   string // shown instead of bars when there is nothing to draw
+	Bars                   []Bar
 }
 
 // UsageCell formats one rate-limit window: a dash when never seen, "reset"
@@ -93,6 +107,53 @@ func max(a, b int) int {
 type entry struct {
 	row    Row
 	active time.Time
+	key    string // the account's usage key, for counting active sessions
+}
+
+func levelFor(pct float64) int {
+	switch {
+	case pct >= redAt:
+		return 2
+	case pct >= amberAt:
+		return 1
+	}
+	return 0
+}
+
+// windowBar describes one limit window: how full, and when it resets.
+func windowBar(label string, w store.Window, now time.Time) Bar {
+	if !w.ResetsAt.IsZero() && !now.Before(w.ResetsAt) {
+		return Bar{Label: label, Detail: "reset"} // rolled over since the reading
+	}
+	b := Bar{Label: label, Pct: w.UsedPct, Level: levelFor(w.UsedPct)}
+	if !w.ResetsAt.IsZero() {
+		at := w.ResetsAt.In(now.Location())
+		layout := "15:04"
+		if y, m, d := at.Date(); func() bool { ny, nm, nd := now.Date(); return y != ny || m != nm || d != nd }() {
+			layout = "Jan 2 15:04"
+		}
+		b.Detail = "resets " + untilText(w.ResetsAt.Sub(now)) + " · " + at.Format(layout)
+	}
+	return b
+}
+
+func untilText(d time.Duration) string {
+	d = d.Round(time.Minute)
+	days, hours, mins := int(d/(24*time.Hour)), int(d/time.Hour)%24, int(d/time.Minute)%60
+	switch {
+	case days > 0:
+		return fmt.Sprintf("%dd %dh", days, hours)
+	case hours > 0:
+		return fmt.Sprintf("%dh %dm", hours, mins)
+	}
+	return fmt.Sprintf("%dm", mins)
+}
+
+func money(x *store.ExtraUsage) string {
+	if x.Currency == "" || strings.EqualFold(x.Currency, "USD") {
+		return fmt.Sprintf("$%.2f / $%.2f", x.Used, x.Limit)
+	}
+	return fmt.Sprintf("%s %.2f / %.2f", strings.ToUpper(x.Currency), x.Used, x.Limit)
 }
 
 // Build gathers every session and account. Without all, it lists running
@@ -216,7 +277,11 @@ func Build(p paths.Paths, now time.Time, all bool) ([]Row, []AccountRow) {
 		if s.ContextPct != nil {
 			r.Ctx = fmt.Sprintf("%.0f%%", *s.ContextPct)
 		}
-		entries = append(entries, entry{r, active})
+		key := s.AccountKey
+		if key == "" {
+			key = s.Identity.Key(s.Profile)
+		}
+		entries = append(entries, entry{r, active, key})
 	}
 	for id, info := range transcripts {
 		if seen[id] || (!all && now.Sub(info.ModTime) > recentFor) {
@@ -232,7 +297,7 @@ func Build(p paths.Paths, now time.Time, all bool) ([]Row, []AccountRow) {
 		if r.Session == "" {
 			r.Session = shortID(id)
 		}
-		entries = append(entries, entry{r, info.ModTime})
+		entries = append(entries, entry{r, info.ModTime, ""})
 	}
 	sort.SliceStable(entries, func(i, j int) bool {
 		a, b := entries[i], entries[j]
@@ -249,17 +314,61 @@ func Build(p paths.Paths, now time.Time, all bool) ([]Row, []AccountRow) {
 		rows[i] = e.row
 	}
 
+	active := map[string]int{}
+	for _, e := range entries {
+		if e.row.Running {
+			active[e.key]++
+		}
+	}
 	var accts []AccountRow
 	for _, a := range accounts.List(p) {
 		id := accounts.ResolveIdentity(a.ConfigDir)
-		ar := AccountRow{Name: a.Name, Label: id.Label(a.Name)}
-		u := usage[id.Key(a.Name)]
+		key := id.Key(a.Name)
+		u, have := usage[key]
+		ar := AccountRow{Name: a.Name, Label: id.Label(a.Name), Org: id.OrgName, Plan: u.Plan, Active: active[key]}
 		var l5, l7 int
 		ar.FiveHour, l5 = UsageCell(u.FiveHour, u.SeenAt, now)
 		ar.Week, l7 = UsageCell(u.SevenDay, u.SeenAt, now)
 		ar.Level = max(l5, l7)
 		if u.FiveHour != nil && u.FiveHour.ResetsAt.After(now) {
-			ar.Resets = u.FiveHour.ResetsAt.Local().Format("15:04")
+			ar.Resets = u.FiveHour.ResetsAt.In(now.Location()).Format("15:04")
+		}
+		if x := u.Extra; x != nil && x.Enabled {
+			ar.Bars = append(ar.Bars, Bar{Label: "$$", Pct: x.UsedPct, Level: levelFor(x.UsedPct), Detail: money(x)})
+		}
+		if u.FiveHour != nil {
+			ar.Bars = append(ar.Bars, windowBar("5h", *u.FiveHour, now))
+		}
+		if u.SevenDay != nil {
+			ar.Bars = append(ar.Bars, windowBar("7d", *u.SevenDay, now))
+		}
+		for _, sc := range u.Scoped {
+			ar.Bars = append(ar.Bars, windowBar(sc.Name, sc.Window, now))
+		}
+		for _, bar := range ar.Bars {
+			ar.Level = max(ar.Level, bar.Level)
+		}
+		switch {
+		case len(ar.Bars) > 0:
+			seen := u.SeenAt
+			if u.FetchedAt.After(seen) {
+				seen = u.FetchedAt
+			}
+			if !seen.IsZero() {
+				if age := now.Sub(seen); age < time.Minute {
+					ar.Seen = "just now"
+				} else {
+					ar.Seen = shortAge(age) + " ago"
+				}
+			}
+		case !have:
+			ar.Note = "usage not seen yet"
+		case u.ProbeError != "":
+			ar.Note = "usage unavailable: " + u.ProbeError
+		case !u.TriedAt.IsZero():
+			ar.Note = "no plan limits reported (signed out, or not a subscription login)"
+		default:
+			ar.Note = "usage not seen yet"
 		}
 		accts = append(accts, ar)
 	}
@@ -295,6 +404,8 @@ const (
 	ansiDim   = "\x1b[2m"
 	ansiAmber = "\x1b[33m"
 	ansiRed   = "\x1b[31m"
+	ansiGreen = "\x1b[32m"
+	ansiCyan  = "\x1b[36m"
 )
 
 func levelColor(level int) string {
@@ -485,31 +596,88 @@ func RenderTable(w io.Writer, rows []Row, accts []AccountRow, width int, color b
 	}
 	line("")
 	line(paint("ACCOUNTS", ansiBold))
-	nameW, labelW := 0, 0
+	nameW := 0
 	for _, a := range accts {
-		nameW, labelW = max(nameW, runeLen(a.Name)), max(labelW, runeLen(a.Label))
+		nameW = max(nameW, runeLen(a.Name))
 	}
-	for _, a := range accts {
-		tail := fmt.Sprintf("5h %s  week %s", a.FiveHour, a.Week)
-		if a.Resets != "" {
-			tail += "  resets " + a.Resets
+	for i, a := range accts {
+		if i > 0 {
+			line("")
 		}
-		if a.FiveHour == dash && a.Week == dash {
-			tail = "usage not seen yet"
+		// Header: the name you pass to -a, then who it is signed in as.
+		plain := fmt.Sprintf("%-*s  %s", nameW, a.Name, clean(a.Label))
+		tail := ""
+		if a.Org != "" {
+			tail += "  [" + clean(a.Org) + "]"
 		}
-		// Keep the usage visible: shorten the label if the line is too long.
-		room := width - 2 - nameW - 2 - 2 - runeLen(tail)
-		lw := labelW
-		if lw > room {
-			lw = max(room, 4)
+		if a.Plan != "" {
+			if a.Org != "" {
+				tail += " · " + a.Plan
+			} else {
+				tail += "  " + a.Plan
+			}
 		}
-		label := fit(clean(a.Label), lw)
-		s := fmt.Sprintf("  %-*s  %s%s  ", nameW, a.Name, label, strings.Repeat(" ", lw-runeLen(label)))
-		s = fit(s+tail, width)
-		if color && a.Level > 0 && strings.HasSuffix(s, tail) {
-			s = strings.TrimSuffix(s, tail) + paint(tail, levelColor(a.Level))
+		if a.Seen != "" {
+			tail += "  · " + a.Seen
 		}
-		line(s)
+		mark := ""
+		if a.Active > 0 {
+			mark = "   ● active"
+			if a.Active > 1 {
+				mark += fmt.Sprintf(" (%d)", a.Active)
+			}
+		}
+		head := fit(plain+tail+mark, width)
+		if color && head == plain+tail+mark {
+			head = paint(plain, ansiBold) + paint(tail, ansiDim) + paint(mark, ansiCyan)
+		}
+		line(head)
+
+		if len(a.Bars) == 0 {
+			if a.Note != "" {
+				line(fit("   "+paint(clean(a.Note), ansiDim), width+len(paint("", ansiDim))))
+			}
+			continue
+		}
+		labelW, detailW := 2, 0
+		for _, b := range a.Bars {
+			labelW, detailW = max(labelW, runeLen(b.Label)), max(detailW, runeLen(b.Detail))
+		}
+		// indent + label + space, then the bar, then " 100%" and the detail
+		barW := width - (3 + labelW + 1) - (1 + 4) - 2 - detailW
+		if barW > 40 {
+			barW = 40
+		}
+		if barW < 10 {
+			barW = 10
+		}
+		for _, b := range a.Bars {
+			pct := b.Pct
+			if pct < 0 {
+				pct = 0
+			}
+			filled := int(pct/100*float64(barW) + 0.5)
+			if filled == 0 && pct > 0 {
+				filled = 1 // any use at all is visible
+			}
+			if filled > barW {
+				filled = barW
+			}
+			code := levelColor(b.Level)
+			if code == "" {
+				code = ansiGreen
+			}
+			pctText := fmt.Sprintf("%3.0f%%", pct)
+			plainLine := fmt.Sprintf("   %-*s %s%s %s  %s", labelW, clean(b.Label),
+				strings.Repeat("━", filled), strings.Repeat("─", barW-filled), pctText, b.Detail)
+			if !color || runeLen(plainLine) > width {
+				line(fit(plainLine, width))
+				continue
+			}
+			line(fmt.Sprintf("   %s %s%s %s  %s", paint(fmt.Sprintf("%-*s", labelW, clean(b.Label)), ansiDim),
+				paint(strings.Repeat("━", filled), code), paint(strings.Repeat("─", barW-filled), ansiDim),
+				paint(pctText, code), b.Detail))
+		}
 	}
 }
 
@@ -548,15 +716,24 @@ func Once(p paths.Paths, out *os.File, all bool) {
 	RenderTable(out, rows, accts, Width(out), IsTerminal(out) && os.Getenv("NO_COLOR") == "")
 }
 
-// Watch redraws the dashboard until interrupted.
-func Watch(p paths.Paths, out *os.File, all bool) {
+// Watch redraws the dashboard until interrupted. refresh, if set, is run in
+// the background (never two at once) to bring account usage up to date; it
+// decides for itself whether anything is stale.
+func Watch(p paths.Paths, out *os.File, all bool, refresh func()) {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(stop)
 	color := os.Getenv("NO_COLOR") == ""
 	tick := time.NewTicker(redrawEvery)
 	defer tick.Stop()
+	var refreshing atomic.Bool
 	for {
+		if refresh != nil && refreshing.CompareAndSwap(false, true) {
+			go func() {
+				defer refreshing.Store(false)
+				refresh()
+			}()
+		}
 		rows, accts := Build(p, time.Now(), all)
 		var b strings.Builder
 		b.WriteString("\x1b[H\x1b[2J")

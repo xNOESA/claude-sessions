@@ -109,6 +109,7 @@ type live struct {
 	acct       accounts.Account
 	prev       *accounts.Account // set after a switch, until the new launch has proved itself
 	switchedAt time.Time
+	closing    bool // the terminal is going away; whatever claude exits with, we are done
 }
 
 func (w *wrapper) say(format string, a ...any) {
@@ -145,6 +146,9 @@ func (l *live) stop() {
 // maybeSwitch acts on a pending switch request once the session is idle
 // (or at once when forced).
 func (w *wrapper) maybeSwitch(l *live) {
+	if l.closing {
+		return
+	}
 	s, ok := store.GetSession(w.r.P, w.id)
 	if !ok || s.SwitchTo == "" {
 		return
@@ -183,7 +187,7 @@ func (w *wrapper) maybeSwitch(l *live) {
 // fallBack handles the new account failing right after a switch: put the
 // session back on the account it came from. Reports whether it did.
 func (w *wrapper) fallBack(l *live, exitErr error) bool {
-	if l.prev == nil || exitCode(exitErr) == 0 || time.Since(l.switchedAt) > fallbackWindow {
+	if l.closing || l.prev == nil || exitCode(exitErr) == 0 || time.Since(l.switchedAt) > fallbackWindow {
 		return false
 	}
 	from := *l.prev

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -179,7 +180,7 @@ func TestBuildUsageTaskPlanCells(t *testing.T) {
 	if r.FiveHour != "92%" || r.Week != "31%" || r.Level != 2 || r.Ctx != "48%" || r.Task != "3/5 fix relay" || r.Plan != "1/2" {
 		t.Errorf("row = %+v", r)
 	}
-	if len(accts) != 1 || accts[0].Label != "d@acme.com" || accts[0].FiveHour != "92%" || accts[0].Week != "31%" || accts[0].Level != 2 || accts[0].Name != "default" {
+	if len(accts) != 1 || accts[0].Label != "d@acme.com" || accts[0].FiveHour != "92%" || accts[0].Week != "31%" || accts[0].Level != 2 || accts[0].Name != "default" || accts[0].Active != 1 {
 		t.Errorf("accounts = %+v", accts)
 	}
 
@@ -187,7 +188,7 @@ func TestBuildUsageTaskPlanCells(t *testing.T) {
 	a, _ := accounts.Create(w.p, "work")
 	w.identity(a.ConfigDir, "w@other.org", "acc-w", "org-other")
 	_, accts = Build(w.p, real, false)
-	if len(accts) != 2 || accts[1].Name != "work" || accts[1].FiveHour != "—" || accts[1].Week != "—" || accts[1].Label != "w@other.org" {
+	if len(accts) != 2 || accts[1].Name != "work" || accts[1].FiveHour != "—" || accts[1].Week != "—" || accts[1].Label != "w@other.org" || len(accts[1].Bars) != 0 || accts[1].Note != "usage not seen yet" || accts[1].Active != 0 {
 		t.Errorf("accounts = %+v", accts)
 	}
 }
@@ -243,8 +244,14 @@ func sampleRows() ([]Row, []AccountRow) {
 				Task: "3/5 fix the outbox relay so that it retries on conflict", Plan: "week 10/14", Level: 2, Running: true},
 			{ID: "2", Project: "site", Session: "mailer", State: "ended", Account: "bo@other.org", FiveHour: "8%", Week: "12%", Ctx: "—", Task: "—", Plan: "—"},
 		}, []AccountRow{
-			{Name: "default", Label: "ana.somebody@a-long-organization-name.example · Max", FiveHour: "92%", Week: "76%", Resets: "14:10", Level: 2},
-			{Name: "work", Label: "bo@other.org", FiveHour: "—", Week: "—"},
+			{Name: "default", Label: "ana.somebody@a-long-organization-name.example", Org: "Acme", Plan: "max", Seen: "4m ago", Active: 1,
+				FiveHour: "92%", Week: "76%", Resets: "14:10", Level: 2, Bars: []Bar{
+					{Label: "$$", Pct: 55, Detail: "$21.99 / $40.00"},
+					{Label: "5h", Pct: 92, Level: 2, Detail: "resets 3h 32m · 14:10"},
+					{Label: "7d", Pct: 76, Level: 1, Detail: "resets 1d 7h · Nov 15 03:59"},
+					{Label: "Fable", Pct: 0, Detail: "resets 6d 2h · Nov 19 23:00"},
+				}},
+			{Name: "work", Label: "bo@other.org", FiveHour: "—", Week: "—", Note: "usage not seen yet"},
 		}
 }
 
@@ -279,7 +286,9 @@ func TestRenderWideKeepsEverything(t *testing.T) {
 	if strings.Contains(out, "…") {
 		t.Errorf("shortened although there was room:\n%s", out)
 	}
-	for _, must := range []string{"week-10 kind run with a very long descriptive name", "3/5 fix the outbox relay so that it retries on conflict", "resets 14:10"} {
+	for _, must := range []string{"week-10 kind run with a very long descriptive name", "3/5 fix the outbox relay so that it retries on conflict",
+		"ana.somebody@a-long-organization-name.example  [Acme] · max  · 4m ago", "● active",
+		"$21.99 / $40.00", "resets 3h 32m · 14:10", "resets 1d 7h · Nov 15 03:59", " 92%", " 76%", "  0%", "usage not seen yet"} {
 		if !strings.Contains(out, must) {
 			t.Errorf("missing %q:\n%s", must, out)
 		}
@@ -317,7 +326,7 @@ func TestRenderJSONRoundTrips(t *testing.T) {
 	if err := json.Unmarshal(b.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Sessions) != 2 || got.Sessions[0] != rows[0] || len(got.Accounts) != 2 || got.Accounts[0] != accts[0] {
+	if len(got.Sessions) != 2 || got.Sessions[0] != rows[0] || len(got.Accounts) != 2 || !reflect.DeepEqual(got.Accounts[0], accts[0]) {
 		t.Errorf("round trip changed data: %+v", got)
 	}
 	b.Reset()
@@ -341,5 +350,115 @@ func TestRenderStripsControlCharacters(t *testing.T) {
 	}
 	if !strings.Contains(out, "evil") || !strings.Contains(out, "line two") {
 		t.Errorf("text lost: %q", out)
+	}
+}
+
+func TestBuildAccountBars(t *testing.T) {
+	w := newWorld(t)
+	w.session("s1", func(s *store.Session) {})
+	w.lock("s1")
+	w.session("s2", func(s *store.Session) {})
+	w.lock("s2")
+	id := store.Identity{Email: "d@acme.com", OrgID: "org-acme", AccountID: "acc-d", Known: true}
+	store.SaveUsage(w.p, store.Usage{Identity: id, Profile: "default", Plan: "max", Available: true,
+		SeenAt: now.Add(-4 * time.Minute), FetchedAt: now.Add(-4 * time.Minute),
+		FiveHour: &store.Window{UsedPct: 16, ResetsAt: now.Add(3*time.Hour + 32*time.Minute)},
+		SevenDay: &store.Window{UsedPct: 52, ResetsAt: now.Add(31*time.Hour + 59*time.Minute)},
+		Scoped:   []store.ScopedWindow{{Name: "Fable", Window: store.Window{UsedPct: 85, ResetsAt: now.Add(32 * time.Hour)}}},
+		Extra:    &store.ExtraUsage{Enabled: true, UsedPct: 54.975, Used: 21.99, Limit: 40, Currency: "USD"}})
+
+	_, accts := Build(w.p, now, false)
+	a := accts[0]
+	if a.Plan != "max" || a.Seen != "4m ago" || a.Active != 2 || a.Note != "" {
+		t.Errorf("header = %+v", a)
+	}
+	want := []Bar{
+		{Label: "$$", Pct: 54.975, Level: 0, Detail: "$21.99 / $40.00"},
+		{Label: "5h", Pct: 16, Level: 0, Detail: "resets 3h 32m · 15:32"},
+		{Label: "7d", Pct: 52, Level: 0, Detail: "resets 1d 7h · Nov 15 19:59"},
+		{Label: "Fable", Pct: 85, Level: 1, Detail: "resets 1d 8h · Nov 15 20:00"},
+	}
+	if !reflect.DeepEqual(a.Bars, want) {
+		t.Errorf("bars =\n %+v\nwant\n %+v", a.Bars, want)
+	}
+}
+
+func TestBuildAccountBarEdgeCases(t *testing.T) {
+	w := newWorld(t)
+	id := store.Identity{Email: "d@acme.com", OrgID: "org-acme", AccountID: "acc-d", Known: true}
+	store.SaveUsage(w.p, store.Usage{Identity: id, Profile: "default", Available: true, SeenAt: now.Add(-30 * time.Second),
+		FiveHour: &store.Window{UsedPct: 97, ResetsAt: now.Add(-time.Minute)}, // already rolled over
+		SevenDay: &store.Window{UsedPct: 3},                                   // no reset time known
+		Extra:    &store.ExtraUsage{Enabled: true, UsedPct: 100, Used: 12, Limit: 12, Currency: "EUR"}})
+	_, accts := Build(w.p, now, false)
+	a := accts[0]
+	want := []Bar{
+		{Label: "$$", Pct: 100, Level: 2, Detail: "EUR 12.00 / 12.00"},
+		{Label: "5h", Pct: 0, Level: 0, Detail: "reset"},
+		{Label: "7d", Pct: 3, Level: 0, Detail: ""},
+	}
+	if !reflect.DeepEqual(a.Bars, want) || a.Seen != "just now" {
+		t.Errorf("seen %q bars = %+v", a.Seen, a.Bars)
+	}
+
+	// Signed out or no plan limits: say so instead of drawing empty bars.
+	store.SaveUsage(w.p, store.Usage{Identity: id, Profile: "default", Available: false, FetchedAt: now, TriedAt: now})
+	_, accts = Build(w.p, now, false)
+	if len(accts[0].Bars) != 0 || accts[0].Note != "no plan limits reported (signed out, or not a subscription login)" {
+		t.Errorf("no-limits account = %+v", accts[0])
+	}
+	store.SaveUsage(w.p, store.Usage{Identity: id, Profile: "default", TriedAt: now, ProbeError: "claude did not answer the usage request in time"})
+	_, accts = Build(w.p, now, false)
+	if accts[0].Note != "usage unavailable: claude did not answer the usage request in time" {
+		t.Errorf("failed probe note = %q", accts[0].Note)
+	}
+}
+
+func TestRenderAccountBars(t *testing.T) {
+	_, accts := sampleRows()
+	var b bytes.Buffer
+	RenderTable(&b, nil, accts, 100, false)
+	lines := strings.Split(b.String(), "\n")
+	find := func(prefix string) string {
+		for _, l := range lines {
+			if strings.HasPrefix(strings.TrimLeft(l, " "), prefix) {
+				return l
+			}
+		}
+		t.Fatalf("no line starting %q in:\n%s", prefix, b.String())
+		return ""
+	}
+	count := func(l string) (filled, empty int) {
+		return strings.Count(l, "━"), strings.Count(l, "─")
+	}
+	f5, e5 := count(find("5h "))
+	f7, e7 := count(find("7d "))
+	ff, ef := count(find("Fable "))
+	if f5+e5 != f7+e7 || f5+e5 != ff+ef || f5+e5 < 10 {
+		t.Errorf("bars differ in length: %d %d %d", f5+e5, f7+e7, ff+ef)
+	}
+	total := f5 + e5
+	if got, want := f5, int(float64(total)*0.92+0.5); got != want {
+		t.Errorf("92%% bar filled %d of %d, want %d", got, total, want)
+	}
+	if ff != 0 {
+		t.Errorf("0%% bar has %d filled cells", ff)
+	}
+	if !strings.HasPrefix(find("default "), "default  ana.somebody@") || !strings.HasPrefix(find("work "), "work     bo@other.org") {
+		t.Errorf("account headers:\n%s", b.String())
+	}
+
+	b.Reset()
+	RenderTable(&b, nil, accts, 100, true)
+	if out := b.String(); !strings.Contains(out, "\x1b[31m") || !strings.Contains(out, "\x1b[33m") || !strings.Contains(out, "\x1b[32m") {
+		t.Errorf("bars not coloured by level: %q", out)
+	}
+}
+
+func TestSmallUsageStillShowsOnBar(t *testing.T) {
+	var b bytes.Buffer
+	RenderTable(&b, nil, []AccountRow{{Name: "default", Label: "a@b.c", Bars: []Bar{{Label: "5h", Pct: 0.4}}}}, 80, false)
+	if strings.Count(b.String(), "━") != 1 {
+		t.Errorf("a non-zero reading should fill at least one cell: %q", b.String())
 	}
 }

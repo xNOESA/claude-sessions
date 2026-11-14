@@ -11,10 +11,10 @@ import (
 
 const version = "0.1.0"
 
-const usage = `usage: cs <command>
+const helpText = `usage: cs <command>
 
   cs                         live dashboard (same as cs status)
-  cs status [--once] [--json] [--all]
+  cs status [--once] [--json] [--all] [--no-refresh]
   cs account add|login|list|remove [name]
   cs new [-a account] [-n name] [--prompt text] [-- claude flags]
   cs resume [session] [-a account] [--force] [-- claude flags]
@@ -39,7 +39,7 @@ func dispatch(args []string) int {
 		case "status":
 			return cmdStatus(p, args[1:])
 		case "help", "-h", "--help":
-			fmt.Print(usage)
+			fmt.Print(helpText)
 			return 0
 		case "account":
 			return cmdAccount(p, args[1:])
@@ -59,6 +59,6 @@ func dispatch(args []string) int {
 			return cmdProject(p, args[1:])
 		}
 	}
-	fmt.Fprint(os.Stderr, usage)
+	fmt.Fprint(os.Stderr, helpText)
 	return 2
 }

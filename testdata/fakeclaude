@@ -3,8 +3,11 @@
 #   FAKE_LOG        file to append one line per launch to
 #   FAKE_EXIT_NOW   exit right after reporting instead of waiting for a signal
 #   FAKE_NO_REPORT  do not call `cs report`
+#   FAKE_TERM_EXIT  exit code when stopped by a signal (default 0)
 #   <config dir>/loggedout  -> `auth status` says signed out
 #   <config dir>/failstart  -> launch exits 1 at once
+#   <config dir>/usage.json -> body of the get_usage answer
+#   FAKE_USAGE_HANG         usage probe never answers
 cfg="${CLAUDE_CONFIG_DIR:-$CS_CLAUDE_DIR}"
 if [ "$1" = auth ]; then
   if [ "$2" = status ]; then
@@ -14,6 +17,18 @@ if [ "$1" = auth ]; then
   echo "AUTH=$2|CONFIG=$CLAUDE_CONFIG_DIR" >> "${FAKE_LOG:-/dev/null}"
   exit 0
 fi
+# Usage probe: `claude -p --input-format stream-json ...` with a get_usage
+# control request on stdin. Answers from <config dir>/usage.json if present.
+case " $* " in *" --input-format "*)
+  echo "USAGE|CONFIG=$CLAUDE_CONFIG_DIR|APIKEY=$ANTHROPIC_API_KEY|ARGV=$*" >> "${FAKE_LOG:-/dev/null}"
+  if [ -n "$FAKE_USAGE_HANG" ]; then sleep 60; fi
+  read -r req
+  rid=$(printf '%s' "$req" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+  if [ -e "$cfg/usage.json" ]; then body=$(cat "$cfg/usage.json"); else body='{"subscription_type":null,"rate_limits_available":false,"rate_limits":null}'; fi
+  echo '{"type":"system","subtype":"init"}'
+  printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":%s}}\n' "$rid" "$body"
+  exit 0 ;;
+esac
 id=""; prev=""
 for a in "$@"; do
   case "$prev" in --session-id|--resume) id="$a" ;; esac
@@ -26,5 +41,5 @@ if [ -z "$FAKE_NO_REPORT" ]; then
   printf '{"session_id":"%s","transcript_path":"","cwd":"%s"}' "$id" "$PWD" | "$CS_BIN" report stop
 fi
 if [ -n "$FAKE_EXIT_NOW" ]; then exit "${FAKE_EXIT_CODE:-0}"; fi
-trap 'exit 0' TERM INT
+trap 'exit "${FAKE_TERM_EXIT:-0}"' TERM INT
 while :; do sleep 0.1; done

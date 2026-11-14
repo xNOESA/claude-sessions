@@ -39,6 +39,8 @@ Run on the owner's Mac after the proof steps pass. Tick each as it holds.
       `cs resume` picks it up.
 - [ ] Task progress appears when the session uses its to-do list; plan
       progress appears in a project with a `PLAN.md` checklist.
+- [ ] The accounts block shows each account's meters, including one with no
+      session running, and the `$$` amounts match Claude's own `/usage`.
 
 ## If a proof step fails
 

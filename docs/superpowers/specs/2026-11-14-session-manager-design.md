@@ -377,3 +377,23 @@ wrapper's own launch record marked `?`.
 
 The `default` account (`~/.claude`) needs no new grant in a sandbox that
 already allows `~/.claude`, apart from `{state_dir}`.
+
+## Account usage block (added 2026-11-14 at the owner's request)
+
+The accounts section shows, per account, a header (account name, email,
+organization, plan, age of the reading, an "active" mark when a session is
+running on it) and one meter per limit: extra-usage spend against its
+monthly limit, the 5-hour and 7-day windows, and any per-model weekly
+windows, each with its percentage and reset time.
+
+The status line only carries the 5-hour and 7-day figures, so `cs` reads the
+rest by starting `claude` under the account's config directory in
+`stream-json` mode and sending the `get_usage` control request with
+`skip_behaviors`. That request answers from the claude.ai usage endpoint
+without a model call. It is run with hooks disabled, in `~/.claude-sessions`,
+with a 20 second limit, at most once per account every five minutes, in the
+background while the dashboard is open. A failed probe keeps the last good
+reading and records the reason. This supersedes the earlier limit that an
+idle account could only show its last-known usage. `get_usage` is not in the
+public documentation; if it goes away, the 5-hour and 7-day figures still
+arrive from running sessions.

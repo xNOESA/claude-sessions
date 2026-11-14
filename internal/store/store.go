@@ -91,12 +91,36 @@ type Window struct {
 	ResetsAt time.Time
 }
 
-// Usage is the last limit usage seen for one real account.
+// ScopedWindow is a per-model weekly limit, labelled by the server.
+type ScopedWindow struct {
+	Name string
+	Window
+}
+
+// ExtraUsage is pay-as-you-go spend beyond the plan, in currency units.
+type ExtraUsage struct {
+	Enabled     bool
+	UsedPct     float64
+	Used, Limit float64
+	Currency    string
+}
+
+// Usage is the last limit usage seen for one real account. FiveHour and
+// SevenDay come from running sessions' status lines and from usage probes;
+// the rest only from probes.
 type Usage struct {
 	FiveHour, SevenDay *Window
-	SeenAt             time.Time
+	SeenAt             time.Time // when any reading last arrived
 	Identity           Identity
 	Profile            string
+
+	Plan       string // subscription type, e.g. "max"
+	Available  bool   // plan limits apply to this account
+	Scoped     []ScopedWindow
+	Extra      *ExtraUsage
+	FetchedAt  time.Time // last successful probe
+	TriedAt    time.Time // last probe attempt
+	ProbeError string    // why the last probe failed, if it did
 }
 
 // WriteJSON writes v to path atomically (temp file then rename), mode 0600,

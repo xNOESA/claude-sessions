@@ -167,3 +167,27 @@ func TestSwitchUnmanaged(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+func TestTerminalClosedRightAfterSwitchDoesNotRelaunch(t *testing.T) {
+	// claude exits non-zero when its terminal goes away; that must not be
+	// mistaken for the new account failing to start.
+	f := newFixture(t, "FAKE_TERM_EXIT=143")
+	s, stop := f.startAsync(func() int { return f.r.New(Opts{Account: "default"}) })
+	if _, err := Switch(f.p, s.ID, "work", false); err != nil {
+		t.Fatal(err)
+	}
+	if l := f.waitLaunches(2, 8*time.Second); len(l) != 2 {
+		t.Fatalf("launches = %v", l)
+	}
+	f.waitState(store.StateIdle)
+	if code := stop(); code == -1 {
+		t.Fatal("the session kept running after its terminal was closed")
+	}
+	time.Sleep(300 * time.Millisecond)
+	if l := f.launches(); len(l) != 2 {
+		t.Errorf("claude was relaunched after the terminal closed: %v", l)
+	}
+	if got := f.onlySession(); got.State != store.StateEnded || got.Profile != "work" {
+		t.Errorf("session = %+v", got)
+	}
+}

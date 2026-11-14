@@ -80,24 +80,44 @@ default, then asks.
 
 ```
 PROJECT  SESSION       STATE      ACCOUNT          5h   WEEK  CTX  TASK           PLAN
-api      week-10 run   working    ana@acme.com     62%  31%   48%  3/5 fix relay  week 10/14
-site     mailer        needs you  bo@other.org     8%   12%   12%  1/2 form test  —
+api      week-10 run   working    ana@acme.com     16%  52%   48%  3/5 fix relay  week 10/14
+site     mailer        needs you  bo@other.org     8%   3%    12%  1/2 form test  —
 
 ACCOUNTS
-  default  ana@acme.com   5h 62%  week 31%  resets 14:10
-  work     bo@other.org   5h 8%  week 12%
+default  ana@acme.com  [Acme] · max  · 4m ago   ● active
+   $$    ━━━━━━━━━━━━━━━━━━━━━━──────────────────  55%  $21.99 / $40.00
+   5h    ━━━━━━──────────────────────────────────  16%  resets 3h 32m · 00:10
+   7d    ━━━━━━━━━━━━━━━━━━━━━───────────────────  52%  resets 1d 7h · Nov 15 03:59
+   Fable ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━──────  85%  resets 1d 7h · Nov 15 04:00
+
+work     bo@other.org  [Other Org] · max  · 4m ago   ● active
+   5h    ━━━─────────────────────────────────────   8%  resets 1h 2m · 21:40
+   7d    ━───────────────────────────────────────   3%  resets 4d 22h · Nov 18 19:00
 ```
+
+Sessions:
 
 - **ACCOUNT** is the login the session is really using, re-read on every
   status line refresh, so a `/login` inside a session shows up.
-- **5h / WEEK** are the account's subscription limits as Claude Code reports
-  them. They can only be read while a session is running on that account,
-  so an idle account shows its last reading with its age, e.g. `62% (12m)`,
-  and `reset` once the window has rolled over. Amber from 75%, red from 90%.
+- **5h / WEEK** are that account's limits. Amber from 75%, red from 90%.
 - **TASK** is the session's own to-do list.
 - **PLAN** is the project's plan, when one is found.
 - **STATE** `unmanaged` means the session was started with plain `claude`;
   `cs resume` picks it up.
+
+Accounts, one block each, headed by the name you pass to `-a`:
+
+- **$$** is extra-usage spend against its monthly limit, when enabled.
+- **5h**, **7d** and any per-model weekly limits (e.g. **Fable**) show how
+  full each window is and when it resets.
+- **● active** marks accounts with a running session; `· 4m ago` is the age
+  of the reading.
+
+Account usage is read by asking Claude Code itself: every five minutes while
+the dashboard is open, `cs` starts `claude` briefly under each account and
+sends its `get_usage` request. That makes no model call and costs nothing,
+and it works for accounts with no session running. `cs` still never touches
+a login. `cs status --no-refresh` skips the check and shows what is stored.
 
 ## Per-project settings
 
@@ -171,6 +191,10 @@ write, the session still runs and the dashboard shows it as
   similar where a link to the shared one belongs, `cs` warns and carries on
   with the private copy. A private history directory is refused.
 - No automatic account rotation: every switch is your command.
+- The `get_usage` request is how Claude Code's own usage screen gets its
+  numbers, but it is not in the public documentation and could change. If it
+  stops answering, the account shows "usage unavailable" and the 5h and week
+  figures fall back to what running sessions report.
 - The transcript format is internal to Claude Code. If it changes, task
   progress shows `—` until the parser is updated.
 
