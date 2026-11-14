@@ -1,0 +1,5 @@
+{"type": "user", "sessionId": "11111111-2222-4333-8444-555555555555", "cwd": "/work/other", "message": {"role": "user", "content": "hi"}}
+{"type": "assistant", "sessionId": "11111111-2222-4333-8444-555555555555", "cwd": "/work/other", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "TaskCreate", "input": {"subject": "a", "description": "a"}}]}}
+{"type": "assistant", "sessionId": "11111111-2222-4333-8444-555555555555", "cwd": "/work/other", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "TaskCreate", "input": {"subject": "b", "description": "b"}}]}}
+{"type": "assistant", "sessionId": "11111111-2222-4333-8444-555555555555", "cwd": "/work/other", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "TaskUpdate", "input": {"taskId": "1", "status": "deleted"}}]}}
+{"type": "assistant", "sessionId": "11111111-2222-4333-8444-555555555555", "cwd": "/work/other", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "TaskUpdate", "input": {"taskId": "2", "status": "completed"}}]}}

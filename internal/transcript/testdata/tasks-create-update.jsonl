@@ -1,0 +1,24 @@
+{"type": "custom-title", "sessionId": "11111111-2222-4333-8444-555555555555", "customTitle": "demo-name"}
+{"type": "agent-name", "sessionId": "11111111-2222-4333-8444-555555555555", "agentName": "demo-name"}
+{"type": "user", "sessionId": "11111111-2222-4333-8444-555555555555", "cwd": "/work/my proj", "message": {"role": "user", "content": "\u2026"}}
+{"type": "last-prompt", "sessionId": "11111111-2222-4333-8444-555555555555"}
+{"type": "custom-title", "sessionId": "11111111-2222-4333-8444-555555555555", "customTitle": "demo-name"}
+{"type": "agent-name", "sessionId": "11111111-2222-4333-8444-555555555555", "agentName": "demo-name"}
+{"type": "assistant", "sessionId": "11111111-2222-4333-8444-555555555555", "cwd": "/work/my proj", "message": {"role": "assistant", "content": []}}
+{"type": "assistant", "sessionId": "11111111-2222-4333-8444-555555555555", "cwd": "/work/my proj", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_x", "name": "ToolSearch", "input": {"query": "select:TaskCreate,TaskUpdate", "max_results": 2}}]}}
+{"type": "user", "sessionId": "11111111-2222-4333-8444-555555555555", "cwd": "/work/my proj", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_x", "content": "ok"}]}}
+{"type": "last-prompt", "sessionId": "11111111-2222-4333-8444-555555555555"}
+{"type": "custom-title", "sessionId": "11111111-2222-4333-8444-555555555555", "customTitle": "demo-name"}
+{"type": "agent-name", "sessionId": "11111111-2222-4333-8444-555555555555", "agentName": "demo-name"}
+{"type": "assistant", "sessionId": "11111111-2222-4333-8444-555555555555", "cwd": "/work/my proj", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_x", "name": "TaskCreate", "input": {"subject": "alpha", "description": "Task alpha"}}]}}
+{"type": "user", "sessionId": "11111111-2222-4333-8444-555555555555", "cwd": "/work/my proj", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_x", "content": "Task #1 created successfully: alpha"}]}}
+{"type": "assistant", "sessionId": "11111111-2222-4333-8444-555555555555", "cwd": "/work/my proj", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_x", "name": "TaskCreate", "input": {"subject": "beta", "description": "Task beta"}}]}}
+{"type": "user", "sessionId": "11111111-2222-4333-8444-555555555555", "cwd": "/work/my proj", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_x", "content": "Task #2 created successfully: beta"}]}}
+{"type": "assistant", "sessionId": "11111111-2222-4333-8444-555555555555", "cwd": "/work/my proj", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_x", "name": "TaskCreate", "input": {"subject": "gamma", "description": "Task gamma"}}]}}
+{"type": "user", "sessionId": "11111111-2222-4333-8444-555555555555", "cwd": "/work/my proj", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_x", "content": "Task #3 created successfully: gamma"}]}}
+{"type": "assistant", "sessionId": "11111111-2222-4333-8444-555555555555", "cwd": "/work/my proj", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_x", "name": "TaskUpdate", "input": {"taskId": "1", "status": "completed"}}]}}
+{"type": "user", "sessionId": "11111111-2222-4333-8444-555555555555", "cwd": "/work/my proj", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_x", "content": "Updated task #1 status"}]}}
+{"type": "assistant", "sessionId": "11111111-2222-4333-8444-555555555555", "cwd": "/work/my proj", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_x", "name": "TaskUpdate", "input": {"taskId": "2", "status": "in_progress"}}]}}
+{"type": "user", "sessionId": "11111111-2222-4333-8444-555555555555", "cwd": "/work/my proj", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_x", "content": "Updated task #2 status"}]}}
+{"type": "assistant", "sessionId": "11111111-2222-4333-8444-555555555555", "cwd": "/work/my proj", "message": {"role": "assistant", "content": [{"type": "text", "text": "\u2026"}]}}
+{"type": "last-prompt", "sessionId": "11111111-2222-4333-8444-555555555555"}
