@@ -18,3 +18,35 @@ plan key.
 
 ## Two-account acceptance
 
+Run on the owner's Mac after the proof steps pass. Tick each as it holds.
+
+- [ ] `cs account add <second>` signs a second account in; `cs account list`
+      shows both, each with the right email.
+- [ ] `cs new -a default -n accept` starts a session; `cs` shows it with the
+      default account's email and, after the first reply, its 5h and week
+      usage.
+- [ ] Ask it to remember a word. `cs switch accept <second>`: the terminal
+      shows `→ now on <second's email>`, the session reopens, and it still
+      knows the word.
+- [ ] `cs` now shows the second account on that row and that account's usage.
+- [ ] Quit the session; `cs resume accept -a default` continues it under the
+      first account.
+- [ ] Inside a session, `/login` to the other account: the row's account
+      changes within a few seconds.
+- [ ] `cs project set allowed_accounts <first email>`, then
+      `cs switch accept <second>` is refused and the session is undisturbed.
+- [ ] A session started with plain `claude` shows as `unmanaged` and
+      `cs resume` picks it up.
+- [ ] Task progress appears when the session uses its to-do list; plan
+      progress appears in a project with a `PLAN.md` checklist.
+
+## If a proof step fails
+
+- **R1** (resume under another account): stop. The design depends on it.
+- **R2** (hooks or status line through `--settings`): the reporter already
+  ignores sessions not started by `cs`, so the same hooks can be installed
+  in the shared `settings.json` instead. That needs a small `cs hooks
+  install` command, not yet written.
+- **R3** (identity keys): only `accounts.ResolveIdentity` in
+  `internal/accounts/accounts.go` needs to change. Until then rows show the
+  account name with a `?`.

@@ -80,6 +80,11 @@ func (r *Runner) Resume(o Opts) int {
 		}
 		o.SessionRef = id
 	}
+	// A running session may not have written any history yet; name it by
+	// what it is rather than reporting that it does not exist.
+	if s, err := findRunning(r.P, o.SessionRef); err == nil {
+		return r.errf("session %s is already running under cs; use `cs switch %s <account>` to change its account", short(s.ID), short(s.ID))
+	}
 	info, err := transcript.Find(r.P.ClaudeDir, o.SessionRef)
 	if errors.Is(err, transcript.ErrAmbiguous) {
 		return r.errf("more than one session matches %q; use more of the id", o.SessionRef)
