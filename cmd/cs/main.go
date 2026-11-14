@@ -31,8 +31,16 @@ func dispatch(args []string) int {
 		return 0
 	}
 	p := paths.Resolve()
+	if len(args) == 0 {
+		return cmdStatus(p, nil)
+	}
 	if len(args) > 0 {
 		switch args[0] {
+		case "status":
+			return cmdStatus(p, args[1:])
+		case "help", "-h", "--help":
+			fmt.Print(usage)
+			return 0
 		case "account":
 			return cmdAccount(p, args[1:])
 		case "report":
