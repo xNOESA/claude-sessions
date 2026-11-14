@@ -34,6 +34,8 @@ func run(args []string) int {
 		switch args[0] {
 		case "account":
 			return cmdAccount(p, args[1:])
+		case "project":
+			return cmdProject(p, args[1:])
 		}
 	}
 	fmt.Fprint(os.Stderr, usage)
