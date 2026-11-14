@@ -5,11 +5,12 @@ Any account can start a session, continue one another account began, or take
 over a running one, and a dashboard shows every session, its account, usage
 and progress.
 
-> **Status: unproven on real accounts.** The code is tested against a
-> stand-in for `claude`. Three things about Claude Code that the design
-> depends on are not in its documentation. Run the scripts in `proofs/`
-> first and record the results in `docs/acceptance.md`. If `r1-resume.sh`
-> fails, `cs` cannot work as designed.
+> **Status: early.** The three proof scripts in `proofs/` passed on the
+> owner's Mac on 2026-11-14 (see `docs/acceptance.md`). The automated tests
+> use a stand-in for `claude`; the two-account checklist in
+> `docs/acceptance.md` has not been run yet. Re-run the proofs after a
+> Claude Code upgrade: they cover behaviour its documentation does not
+> promise.
 
 ## How it works
 
