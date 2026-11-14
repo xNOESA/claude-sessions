@@ -41,6 +41,10 @@ func run(args []string) int {
 				report.Handle(p, args[1], os.Stdin, os.Stdout, os.Getenv)
 			}
 			return 0
+		case "new":
+			return cmdNew(p, args[1:])
+		case "resume":
+			return cmdResume(p, args[1:])
 		case "project":
 			return cmdProject(p, args[1:])
 		}

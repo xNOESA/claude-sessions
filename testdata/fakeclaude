@@ -1,0 +1,30 @@
+#!/bin/sh
+# Stand-in for the claude CLI in tests. No network, no login.
+#   FAKE_LOG        file to append one line per launch to
+#   FAKE_EXIT_NOW   exit right after reporting instead of waiting for a signal
+#   FAKE_NO_REPORT  do not call `cs report`
+#   <config dir>/loggedout  -> `auth status` says signed out
+#   <config dir>/failstart  -> launch exits 1 at once
+cfg="${CLAUDE_CONFIG_DIR:-$CS_CLAUDE_DIR}"
+if [ "$1" = auth ]; then
+  if [ "$2" = status ]; then
+    if [ -e "$cfg/loggedout" ]; then echo '{"loggedIn": false}'; exit 1; fi
+    echo '{"loggedIn": true}'; exit 0
+  fi
+  echo "AUTH=$2|CONFIG=$CLAUDE_CONFIG_DIR" >> "${FAKE_LOG:-/dev/null}"
+  exit 0
+fi
+id=""; prev=""
+for a in "$@"; do
+  case "$prev" in --session-id|--resume) id="$a" ;; esac
+  prev="$a"
+done
+printf 'ARGS=%s|CONFIG=%s|CS_SESSION=%s|APIKEY=%s|PROFILE=%s|WRAPPED=%s|PWD=%s\n' \
+  "$*" "$CLAUDE_CONFIG_DIR" "$CS_SESSION" "$ANTHROPIC_API_KEY" "$CS_PROFILE" "$WRAPPED" "$PWD" >> "${FAKE_LOG:-/dev/null}"
+if [ -e "$cfg/failstart" ]; then echo "fake claude: cannot start" >&2; exit 1; fi
+if [ -z "$FAKE_NO_REPORT" ]; then
+  printf '{"session_id":"%s","transcript_path":"","cwd":"%s"}' "$id" "$PWD" | "$CS_BIN" report stop
+fi
+if [ -n "$FAKE_EXIT_NOW" ]; then exit "${FAKE_EXIT_CODE:-0}"; fi
+trap 'exit 0' TERM INT
+while :; do sleep 0.1; done
