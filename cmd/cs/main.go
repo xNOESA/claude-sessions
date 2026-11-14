@@ -23,9 +23,9 @@ const usage = `usage: cs <command>
   cs version
 `
 
-func main() { os.Exit(run(os.Args[1:])) }
+func main() { os.Exit(dispatch(os.Args[1:])) }
 
-func run(args []string) int {
+func dispatch(args []string) int {
 	if len(args) > 0 && args[0] == "version" {
 		fmt.Println("cs " + version)
 		return 0
