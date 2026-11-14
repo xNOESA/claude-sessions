@@ -29,7 +29,8 @@ import (
 type Opts struct {
 	Account, Name, SessionRef string
 	Force                     bool
-	ClaudeArgs                []string
+	Prompt                    string   // first message; sent on the first launch only
+	ClaudeArgs                []string // extra claude flags; repeated on every relaunch
 }
 
 // Stdio is what the session's terminal is attached to.
@@ -52,9 +53,24 @@ type Runner struct {
 	Pick    func([]transcript.Info) string // pick a session id; nil uses a numbered prompt
 }
 
-// StrippedEnv are removed from every session: each would override the
-// account's own login for all profiles.
-var StrippedEnv = []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"}
+// StrippedEnv are removed from every session (see accounts.StrippedEnv).
+var StrippedEnv = accounts.StrippedEnv
+
+// ownedFlags are claude options cs sets itself; passing them through would
+// start a different session than the one cs is tracking.
+var ownedFlags = []string{"--resume", "-r", "--continue", "-c", "--session-id", "--settings", "--fork-session", "--print", "-p"}
+
+func ownedFlag(args []string) string {
+	for _, a := range args {
+		name, _, _ := strings.Cut(a, "=")
+		for _, f := range ownedFlags {
+			if name == f {
+				return f
+			}
+		}
+	}
+	return ""
+}
 
 func (r *Runner) errf(format string, a ...any) int {
 	fmt.Fprintf(r.Stdio.Err, "cs: "+format+"\n", a...)
@@ -98,7 +114,9 @@ func (r *Runner) Resume(o Opts) int {
 		return r.errf("session %s is already running under cs; use `cs switch %s <account>` to change its account", short(info.ID), short(info.ID))
 	}
 	if !o.Force {
-		cleanExit := hadState && prev.Managed && prev.State == store.StateEnded
+		// cs ended this session itself and nothing has written to it since.
+		cleanExit := hadState && prev.Managed && prev.State == store.StateEnded &&
+			!info.ModTime.After(prev.UpdatedAt.Add(2*time.Second))
 		if (!cleanExit && transcript.RecentlyWritten(info.Path, time.Now())) || openElsewhere(info.ID) {
 			return r.errf("session %s appears to be open in another terminal (its history changed in the last minute, or a claude process has it open). Close it there first, or pass --force.", short(info.ID))
 		}
@@ -302,10 +320,14 @@ type wrapper struct {
 	root     string
 	settings project.Settings
 	name     string
-	extra    []string // the user's own claude arguments
+	extra    []string // the user's own claude flags, repeated on relaunch
+	prompt   string   // first message, consumed by the first launch
 }
 
 func (r *Runner) launch(id string, resume bool, transcriptPath, prevProfile string, o Opts) int {
+	if f := ownedFlag(o.ClaudeArgs); f != "" {
+		return r.errf("%s is set by cs and cannot be passed to claude; use `cs resume` to continue a session", f)
+	}
 	root := project.Root(r.Cwd)
 	settings := project.Load(r.P, root)
 
@@ -317,6 +339,11 @@ func (r *Runner) launch(id string, resume bool, transcriptPath, prevProfile stri
 	if err != nil {
 		return r.errf("%v", err)
 	}
+	if warnings, _ := accounts.CheckLinks(r.P, acct); len(warnings) > 0 {
+		for _, w := range warnings {
+			fmt.Fprintln(r.Stdio.Err, "cs: warning: "+w)
+		}
+	}
 	if helper := apiKeyHelper(r.P.ClaudeDir); helper {
 		return r.errf("%s sets apiKeyHelper, which overrides every account's login, so cs cannot tell accounts apart. Remove it to use cs.", filepath.Join(r.P.ClaudeDir, "settings.json"))
 	}
@@ -327,7 +354,7 @@ func (r *Runner) launch(id string, resume bool, transcriptPath, prevProfile stri
 	}
 	defer release()
 
-	w := &wrapper{r: r, id: id, root: root, settings: settings, name: o.Name, extra: o.ClaudeArgs}
+	w := &wrapper{r: r, id: id, root: root, settings: settings, name: o.Name, extra: o.ClaudeArgs, prompt: o.Prompt}
 	if err := os.MkdirAll(filepath.Dir(w.settingsFile()), 0o700); err != nil {
 		return r.errf("%v", err)
 	}
@@ -394,6 +421,11 @@ func (w *wrapper) command(acct accounts.Account, resume bool) *exec.Cmd {
 	}
 	args = append(args, "--settings", w.settingsFile())
 	args = append(args, w.extra...)
+	if w.prompt != "" {
+		// Only once: a relaunch must not submit the prompt again.
+		args = append(args, w.prompt)
+		w.prompt = ""
+	}
 
 	var cmd *exec.Cmd
 	if tmpl := w.settings.Launch; tmpl != "" {
@@ -446,8 +478,11 @@ func (w *wrapper) run(acct accounts.Account, resume bool) int {
 	r := w.r
 	// The terminal sends Ctrl-C and Ctrl-\ to the whole foreground group;
 	// they are for claude, not for the wrapper.
-	signal.Ignore(syscall.SIGINT, syscall.SIGQUIT)
-	defer signal.Reset(syscall.SIGINT, syscall.SIGQUIT)
+	// They are caught and dropped, not ignored: an ignored signal stays
+	// ignored in the child, which would make it and its tools uninterruptible.
+	drop := make(chan os.Signal, 1)
+	signal.Notify(drop, syscall.SIGINT, syscall.SIGQUIT)
+	defer signal.Stop(drop)
 	sigs := make(chan os.Signal, 8)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGUSR1)
 	defer signal.Stop(sigs)

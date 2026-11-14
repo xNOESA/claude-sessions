@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"claude-sessions/internal/paths"
 )
@@ -40,8 +41,8 @@ func TestCreateLinksSharedStore(t *testing.T) {
 			t.Errorf("%s is not a link to the shared store", n)
 		}
 	}
-	if _, err := os.Lstat(filepath.Join(a.ConfigDir, "skills")); !os.IsNotExist(err) {
-		t.Errorf("skills should not exist: %v", err)
+	if _, err := os.Lstat(filepath.Join(a.ConfigDir, "CLAUDE.md")); !os.IsNotExist(err) {
+		t.Errorf("CLAUDE.md should not exist until the shared store has one: %v", err)
 	}
 	if st, err := os.Stat(filepath.Join(p.ClaudeDir, "projects")); err != nil || !st.IsDir() {
 		t.Errorf("shared projects dir not created: %v", err)
@@ -70,24 +71,6 @@ func TestEnsureLinksAddsLaterFiles(t *testing.T) {
 	}
 	if !isLinkTo(t, filepath.Join(a.ConfigDir, "CLAUDE.md"), filepath.Join(p.ClaudeDir, "CLAUDE.md")) {
 		t.Error("CLAUDE.md link missing")
-	}
-}
-
-func TestEnsureLinksRefusesRealFile(t *testing.T) {
-	p := testPaths(t)
-	a, err := Create(p, "work")
-	if err != nil {
-		t.Fatal(err)
-	}
-	os.WriteFile(filepath.Join(p.ClaudeDir, "settings.json"), []byte("{}"), 0o600)
-	real := filepath.Join(a.ConfigDir, "settings.json")
-	os.WriteFile(real, []byte("mine"), 0o600)
-	err = EnsureLinks(p, a)
-	if err == nil || !strings.Contains(err.Error(), real) {
-		t.Fatalf("err = %v, want one naming %s", err, real)
-	}
-	if b, _ := os.ReadFile(real); string(b) != "mine" {
-		t.Error("real file was touched")
 	}
 }
 
@@ -183,5 +166,86 @@ func TestLoggedInUsesConfigDir(t *testing.T) {
 	d, _ := Get(p, "default")
 	if LoggedIn(p, d) {
 		t.Error("default should not be logged in")
+	}
+}
+
+func TestLoggedInIgnoresCredentialEnv(t *testing.T) {
+	p := testPaths(t)
+	a, _ := Create(p, "work")
+	// Like the real CLI: an API key in the environment reports "logged in"
+	// even though the profile itself is signed out.
+	fake := filepath.Join(t.TempDir(), "fake")
+	os.WriteFile(fake, []byte("#!/bin/sh\nif [ -n \"$ANTHROPIC_API_KEY$ANTHROPIC_AUTH_TOKEN$CLAUDE_CODE_OAUTH_TOKEN\" ]; then echo '{\"loggedIn\": true}'; else echo '{\"loggedIn\": false}'; fi\n"), 0o700)
+	p.ClaudeBin = fake
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok")
+	if LoggedIn(p, a) {
+		t.Error("a signed-out profile looked signed in because of a key in the environment")
+	}
+}
+
+func TestLoggedInTimesOut(t *testing.T) {
+	p := testPaths(t)
+	a, _ := Create(p, "work")
+	fake := filepath.Join(t.TempDir(), "fake")
+	os.WriteFile(fake, []byte("#!/bin/sh\nsleep 60\n"), 0o700)
+	p.ClaudeBin = fake
+	old := loggedInTimeout
+	loggedInTimeout = 300 * time.Millisecond
+	defer func() { loggedInTimeout = old }()
+	start := time.Now()
+	if LoggedIn(p, a) {
+		t.Error("a hung status check counted as signed in")
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("took %v", d)
+	}
+}
+
+func TestSharedDirectoriesAlwaysLinked(t *testing.T) {
+	p := testPaths(t)
+	a, err := Create(p, "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Claude creates these on its own; if they were not linked up front the
+	// account would grow private copies that later block linking.
+	for _, n := range []string{"projects", "tasks", "skills", "agents", "commands", "plugins"} {
+		if !isLinkTo(t, filepath.Join(a.ConfigDir, n), filepath.Join(p.ClaudeDir, n)) {
+			t.Errorf("%s not linked at creation", n)
+		}
+	}
+}
+
+func TestOptionalConflictWarnsButHistoryConflictRefuses(t *testing.T) {
+	p := testPaths(t)
+	a, _ := Create(p, "work")
+	os.WriteFile(filepath.Join(p.ClaudeDir, "settings.json"), []byte("{}"), 0o600)
+	real := filepath.Join(a.ConfigDir, "settings.json")
+	os.WriteFile(real, []byte("mine"), 0o600)
+	warn, err := CheckLinks(p, a)
+	if err != nil {
+		t.Fatalf("an optional file in the way must not block launches: %v", err)
+	}
+	if len(warn) != 1 || !strings.Contains(warn[0], real) {
+		t.Errorf("warnings = %v", warn)
+	}
+	// History is different: a private projects directory would fork it.
+	os.Remove(filepath.Join(a.ConfigDir, "projects"))
+	os.MkdirAll(filepath.Join(a.ConfigDir, "projects"), 0o700)
+	if _, err := CheckLinks(p, a); err == nil || !strings.Contains(err.Error(), "projects") {
+		t.Errorf("private history directory accepted: %v", err)
+	}
+}
+
+func TestDefaultIdentityIgnoresStaleFileInsideClaudeDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".claude")
+	os.MkdirAll(dir, 0o700)
+	os.WriteFile(filepath.Join(dir, ".claude.json"), []byte(`{"oauthAccount":{"emailAddress":"stale@old.org","accountUuid":"x","organizationUuid":"y"}}`), 0o600)
+	os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"oauthAccount":{"emailAddress":"real@now.org","accountUuid":"a","organizationUuid":"o"}}`), 0o600)
+	if id := ResolveIdentity(dir); id.Email != "real@now.org" {
+		t.Errorf("default account identity = %q, want the one plain claude uses", id.Email)
 	}
 }

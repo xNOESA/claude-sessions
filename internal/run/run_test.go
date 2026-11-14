@@ -439,3 +439,62 @@ func TestLaunchTemplateWithSpaces(t *testing.T) {
 		t.Errorf("placeholders = %q, want %q", b, want)
 	}
 }
+
+func TestChildDoesNotInheritIgnoredInterrupt(t *testing.T) {
+	f := newFixture(t, "FAKE_EXIT_NOW=1")
+	marker := filepath.Join(f.p.Home, "survived-sigint")
+	// A child that inherits SIGINT as "ignored" cannot be interrupted, and
+	// neither can anything it starts. The inner shell interrupts itself.
+	project.Set(f.p, f.r.Cwd, "launch", `sh -c 'sh -c "kill -INT \$\$; echo ignored > \"\$0\""  "$0"; shift 0; exec "$@"' `+"'"+marker+"'"+` {claude}`)
+	f.r.New(Opts{Account: "work"})
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("the session's process started with Ctrl-C ignored")
+	}
+}
+
+func TestPromptOnlyOnFirstLaunch(t *testing.T) {
+	f := newFixture(t)
+	s, _ := f.startAsync(func() int {
+		return f.r.New(Opts{Account: "default", Prompt: "fix the bug", ClaudeArgs: []string{"--model", "opus"}})
+	})
+	if _, err := Switch(f.p, s.ID, "work", false); err != nil {
+		t.Fatal(err)
+	}
+	l := f.waitLaunches(2, 8*time.Second)
+	if len(l) != 2 {
+		t.Fatalf("launches = %v", l)
+	}
+	if !strings.HasSuffix(field(l[0], "ARGS"), "--model opus fix the bug") {
+		t.Errorf("first launch args = %q", field(l[0], "ARGS"))
+	}
+	if strings.Contains(field(l[1], "ARGS"), "fix the bug") || !strings.Contains(field(l[1], "ARGS"), "--model opus") {
+		t.Errorf("relaunch must keep flags and not resubmit the prompt: %q", field(l[1], "ARGS"))
+	}
+}
+
+func TestRejectsClaudeArgsThatCsOwns(t *testing.T) {
+	for _, bad := range []string{"--resume", "-r", "--session-id", "--settings", "-c", "--continue", "-p", "--print", "--fork-session"} {
+		f := newFixture(t, "FAKE_EXIT_NOW=1")
+		if code := f.r.New(Opts{Account: "work", ClaudeArgs: []string{bad, "x"}}); code != 1 || len(f.launches()) != 0 {
+			t.Errorf("%s accepted (exit %d)", bad, code)
+		}
+		if !strings.Contains(f.err.String(), bad) {
+			t.Errorf("%s: stderr %q", bad, f.err.String())
+		}
+	}
+}
+
+func TestCleanExitDoesNotExcuseLaterWrites(t *testing.T) {
+	f := newFixture(t, "FAKE_EXIT_NOW=1")
+	if code := f.r.New(Opts{Account: "default"}); code != 0 {
+		t.Fatal(f.err.String())
+	}
+	s := f.onlySession()
+	// cs recorded the end a while ago; something else has written since.
+	s.UpdatedAt = time.Now().Add(-30 * time.Second)
+	store.WriteJSON(f.p.SessionFile(s.ID), &s)
+	f.transcriptFor(s.ID, 0)
+	if code := f.r.Resume(Opts{SessionRef: s.ID, Account: "work"}); code != 1 || !strings.Contains(f.err.String(), "appears to be open") {
+		t.Errorf("exit %d stderr %q", code, f.err.String())
+	}
+}

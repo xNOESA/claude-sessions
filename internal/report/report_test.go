@@ -247,3 +247,18 @@ func TestUserStatusLine(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestIdlePromptNotificationKeepsIdle(t *testing.T) {
+	p, _, e := setup(t)
+	handle(p, "stop", hookInput(""), e)
+	idle := `{"session_id":"` + sid + `","cwd":"/work/my proj","notification_type":"idle_prompt","message":"Claude is waiting for your input"}`
+	handle(p, "notification", idle, e)
+	if s := session(t, p); s.State != store.StateIdle {
+		t.Errorf("idle reminder changed state to %q; an idle session must stay switchable", s.State)
+	}
+	perm := `{"session_id":"` + sid + `","cwd":"/work/my proj","notification_type":"permission_prompt","message":"Claude needs your permission"}`
+	handle(p, "notification", perm, e)
+	if s := session(t, p); s.State != store.StateNeedsYou {
+		t.Errorf("permission prompt gave state %q, want needs_you", s.State)
+	}
+}

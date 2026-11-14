@@ -7,7 +7,7 @@ import (
 	"claude-sessions/internal/run"
 )
 
-// parseLaunch reads `[session] [-a account] [-n name] [--force] [-- claude args]`.
+// parseLaunch reads `[session] [-a account] [-n name] [--prompt text] [--force] [-- claude flags]`.
 func parseLaunch(args []string) (o run.Opts, positional []string, ok bool) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -27,6 +27,12 @@ func parseLaunch(args []string) (o run.Opts, positional []string, ok bool) {
 			}
 			i++
 			o.Name = args[i]
+		case a == "--prompt":
+			if i+1 >= len(args) {
+				return o, nil, false
+			}
+			i++
+			o.Prompt = args[i]
 		case a == "--force":
 			o.Force = true
 		case len(a) > 0 && a[0] == '-':
@@ -54,7 +60,7 @@ func runner(p paths.Paths) (*run.Runner, int) {
 func cmdNew(p paths.Paths, args []string) int {
 	o, pos, ok := parseLaunch(args)
 	if !ok || len(pos) != 0 {
-		return fail("usage: cs new [-a account] [-n name] [-- claude args]")
+		return fail("usage: cs new [-a account] [-n name] [--prompt text] [-- claude flags]")
 	}
 	r, code := runner(p)
 	if r == nil {
@@ -66,7 +72,7 @@ func cmdNew(p paths.Paths, args []string) int {
 func cmdResume(p paths.Paths, args []string) int {
 	o, pos, ok := parseLaunch(args)
 	if !ok || len(pos) > 1 {
-		return fail("usage: cs resume [session] [-a account] [--force] [-- claude args]")
+		return fail("usage: cs resume [session] [-a account] [--force] [--prompt text] [-- claude flags]")
 	}
 	if len(pos) == 1 {
 		o.SessionRef = pos[0]

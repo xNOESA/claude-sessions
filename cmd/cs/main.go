@@ -16,8 +16,8 @@ const usage = `usage: cs <command>
   cs                         live dashboard (same as cs status)
   cs status [--once] [--json] [--all]
   cs account add|login|list|remove [name]
-  cs new [-a account] [-n name] [-- claude args]
-  cs resume [session] [-a account] [--force] [-- claude args]
+  cs new [-a account] [-n name] [--prompt text] [-- claude flags]
+  cs resume [session] [-a account] [--force] [-- claude flags]
   cs switch <session> <account> [--force]
   cs project set <key> <value> | show
   cs version

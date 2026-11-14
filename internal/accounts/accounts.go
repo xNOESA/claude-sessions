@@ -4,6 +4,7 @@
 package accounts
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"claude-sessions/internal/paths"
@@ -27,10 +29,22 @@ type Account struct {
 
 var nameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
 
-// alwaysLinked are created in the shared store if missing; the rest are
-// linked only when the shared store has them.
-var alwaysLinked = []string{"projects", "tasks"}
-var linkedIfPresent = []string{"settings.json", "CLAUDE.md", "skills", "agents", "commands", "plugins", "keybindings.json"}
+// Shared between every account. History must be shared or sessions fork, so
+// a conflict there is an error. The other directories are created in the
+// shared store up front, because Claude Code would otherwise create private
+// ones in the account that later block linking. Files are linked once the
+// shared store has them.
+var (
+	requiredDirs = []string{"projects", "tasks"}
+	optionalDirs = []string{"skills", "agents", "commands", "plugins"}
+	sharedFiles  = []string{"settings.json", "CLAUDE.md", "keybindings.json"}
+)
+
+// StrippedEnv are removed from every claude process cs starts: each would
+// override the account's own login, for every profile.
+var StrippedEnv = []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"}
+
+var loggedInTimeout = 10 * time.Second
 
 func load(p paths.Paths) map[string]Account {
 	m := map[string]Account{}
@@ -90,20 +104,32 @@ func Create(p paths.Paths, name string) (Account, error) {
 }
 
 // EnsureLinks adds any missing links from the account's config directory to
-// the shared store. It never replaces a real file or directory.
+// the shared store, ignoring warnings.
 func EnsureLinks(p paths.Paths, a Account) error {
+	_, err := CheckLinks(p, a)
+	return err
+}
+
+// CheckLinks adds any missing links and never replaces a real file or
+// directory. A private history directory is an error; anything else in the
+// way is returned as a warning, since the account still works without it.
+func CheckLinks(p paths.Paths, a Account) (warnings []string, err error) {
 	if a.ConfigDir == p.ClaudeDir {
-		return nil
+		return nil, nil
 	}
 	if err := os.MkdirAll(a.ConfigDir, 0o700); err != nil {
-		return err
+		return nil, err
 	}
-	for _, n := range alwaysLinked {
+	for _, n := range append(append([]string{}, requiredDirs...), optionalDirs...) {
 		if err := os.MkdirAll(filepath.Join(p.ClaudeDir, n), 0o700); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	names := append(append([]string{}, alwaysLinked...), linkedIfPresent...)
+	required := map[string]bool{}
+	for _, n := range requiredDirs {
+		required[n] = true
+	}
+	names := append(append(append([]string{}, requiredDirs...), optionalDirs...), sharedFiles...)
 	for _, n := range names {
 		target := filepath.Join(p.ClaudeDir, n)
 		if _, err := os.Stat(target); err != nil {
@@ -113,21 +139,28 @@ func EnsureLinks(p paths.Paths, a Account) error {
 		st, err := os.Lstat(link)
 		if errors.Is(err, os.ErrNotExist) {
 			if err := os.Symlink(target, link); err != nil {
-				return err
+				return warnings, err
 			}
 			continue
 		}
 		if err != nil {
-			return err
+			return warnings, err
 		}
+		problem := ""
 		if st.Mode()&os.ModeSymlink == 0 {
-			return fmt.Errorf("%s exists and is not a link to the shared store; move it aside so every account shares %s", link, target)
+			problem = fmt.Sprintf("%s is not a link to the shared %s", link, target)
+		} else if got, _ := os.Readlink(link); got != target {
+			problem = fmt.Sprintf("%s links to %s, not the shared %s", link, got, target)
 		}
-		if got, _ := os.Readlink(link); got != target {
-			return fmt.Errorf("%s links to %s, expected %s", link, got, target)
+		if problem == "" {
+			continue
 		}
+		if required[n] {
+			return warnings, fmt.Errorf("%s; this account would keep its own %s and sessions could not move between accounts. Move it aside and try again", problem, n)
+		}
+		warnings = append(warnings, problem+"; account "+a.Name+" uses its own copy")
 	}
-	return nil
+	return warnings, nil
 }
 
 // Delete removes an account's registration and config directory. Links are
@@ -175,11 +208,14 @@ func ResolveIdentity(configDir string) store.Identity {
 
 // IdentityFile is the file ResolveIdentity would read, for change detection.
 func identityFiles(configDir string) []string {
-	return []string{
-		filepath.Join(configDir, ".claude.json"),
-		// Without CLAUDE_CONFIG_DIR, Claude Code keeps this file beside ~/.claude.
-		filepath.Join(filepath.Dir(configDir), ".claude.json"),
+	// Without CLAUDE_CONFIG_DIR, Claude Code keeps this file beside ~/.claude.
+	beside := filepath.Join(filepath.Dir(configDir), ".claude.json")
+	if home, err := os.UserHomeDir(); err == nil && configDir == filepath.Join(home, ".claude") {
+		// The real default runs with the variable unset (see ConfigEnv), so
+		// only the home file is current; one inside ~/.claude would be stale.
+		return []string{beside}
 	}
+	return []string{filepath.Join(configDir, ".claude.json"), beside}
 }
 
 // ConfigEnv returns the CLAUDE_CONFIG_DIR value to launch an account with.
@@ -194,11 +230,13 @@ func ConfigEnv(p paths.Paths, a Account) (value string, set bool) {
 	return a.ConfigDir, true
 }
 
-// Environ returns env with CLAUDE_CONFIG_DIR set or removed for the account.
+// Environ returns env with CLAUDE_CONFIG_DIR set or removed for the account
+// and the credential variables in StrippedEnv removed.
 func Environ(p paths.Paths, a Account, env []string) []string {
 	out := make([]string, 0, len(env)+1)
 	for _, kv := range env {
-		if len(kv) >= 18 && kv[:18] == "CLAUDE_CONFIG_DIR=" {
+		k, _, _ := strings.Cut(kv, "=")
+		if k == "CLAUDE_CONFIG_DIR" || isStripped(k) {
 			continue
 		}
 		out = append(out, kv)
@@ -209,10 +247,24 @@ func Environ(p paths.Paths, a Account, env []string) []string {
 	return out
 }
 
-// LoggedIn asks Claude Code whether the account is signed in.
+func isStripped(key string) bool {
+	for _, s := range StrippedEnv {
+		if key == s {
+			return true
+		}
+	}
+	return false
+}
+
+// LoggedIn asks Claude Code whether the account itself is signed in. The
+// check runs without credential variables (which would report "signed in"
+// for any profile) and gives up after a few seconds.
 func LoggedIn(p paths.Paths, a Account) bool {
-	cmd := exec.Command(p.ClaudeBin, "auth", "status")
+	ctx, cancel := context.WithTimeout(context.Background(), loggedInTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, p.ClaudeBin, "auth", "status")
 	cmd.Env = Environ(p, a, os.Environ())
+	cmd.WaitDelay = 500 * time.Millisecond
 	out, _ := cmd.Output()
 	var d struct {
 		LoggedIn bool `json:"loggedIn"`

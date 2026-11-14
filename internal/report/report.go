@@ -76,7 +76,10 @@ type input struct {
 	SessionName    string `json:"session_name"`
 	TranscriptPath string `json:"transcript_path"`
 	Cwd            string `json:"cwd"`
-	Model          struct {
+	// NotificationType distinguishes "waiting for your input" reminders
+	// (idle_prompt) from prompts that block the session.
+	NotificationType string `json:"notification_type"`
+	Model            struct {
 		DisplayName string `json:"display_name"`
 	} `json:"model"`
 	Cost struct {
@@ -146,8 +149,11 @@ func Handle(p paths.Paths, event string, stdin io.Reader, stdout io.Writer, gete
 		case "stop":
 			s.State = store.StateIdle
 		case "notification":
-			// A notification while working is usually a permission prompt.
-			s.State = store.StateNeedsYou
+			// The idle reminder is not a request: the session stays idle,
+			// and so stays switchable. Anything else wants the user.
+			if in.NotificationType != "idle_prompt" {
+				s.State = store.StateNeedsYou
+			}
 		case "session-end":
 			s.State = store.StateEnded
 		}

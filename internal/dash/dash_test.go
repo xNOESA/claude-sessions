@@ -326,3 +326,20 @@ func TestRenderJSONRoundTrips(t *testing.T) {
 		t.Errorf("empty JSON should have empty arrays, got %s", b.String())
 	}
 }
+
+func TestRenderStripsControlCharacters(t *testing.T) {
+	rows := []Row{{ID: "1", Project: "p", Session: "evil\x1b[2Jname\ttab", State: "idle", Account: "a@b.c",
+		FiveHour: "—", Week: "—", Ctx: "—", Task: "1/2 line one\nline two\x07", Plan: "—", Running: true}}
+	var b bytes.Buffer
+	RenderTable(&b, rows, nil, 200, false)
+	out := b.String()
+	if strings.ContainsAny(out, "\x1b\x07\t") {
+		t.Errorf("control characters reached the terminal: %q", out)
+	}
+	if n := strings.Count(strings.TrimRight(out, "\n"), "\n"); n != 1 {
+		t.Errorf("a newline in a task split the row: %q", out)
+	}
+	if !strings.Contains(out, "evil") || !strings.Contains(out, "line two") {
+		t.Errorf("text lost: %q", out)
+	}
+}

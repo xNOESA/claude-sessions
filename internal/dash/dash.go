@@ -14,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 	"unicode/utf8"
 	"unsafe"
 
@@ -308,6 +309,26 @@ func levelColor(level int) string {
 
 func runeLen(s string) int { return utf8.RuneCountInString(s) }
 
+// clean makes text safe for one table cell: session names and task subjects
+// come from the user and the model, and must not carry terminal control
+// sequences or line breaks onto the screen.
+func clean(s string) string {
+	if !strings.ContainsFunc(s, unicode.IsControl) {
+		return s
+	}
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '\n' || r == '\t' || r == '\r':
+			b.WriteByte(' ')
+		case unicode.IsControl(r):
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 // fit shortens s to at most n characters, marking the cut with an ellipsis.
 func fit(s string, n int) string {
 	if runeLen(s) <= n {
@@ -356,6 +377,9 @@ func RenderTable(w io.Writer, rows []Row, accts []AccountRow, width int, color b
 		}
 		for i, r := range rows {
 			cells[i] = []string{r.Project, r.Session, r.State, r.Account, r.FiveHour, r.Week, r.Ctx, r.Task, r.Plan}
+			for c := range cells[i] {
+				cells[i][c] = clean(cells[i][c])
+			}
 			for c, v := range cells[i] {
 				widths[c] = max(widths[c], runeLen(v))
 			}
@@ -479,7 +503,7 @@ func RenderTable(w io.Writer, rows []Row, accts []AccountRow, width int, color b
 		if lw > room {
 			lw = max(room, 4)
 		}
-		label := fit(a.Label, lw)
+		label := fit(clean(a.Label), lw)
 		s := fmt.Sprintf("  %-*s  %s%s  ", nameW, a.Name, label, strings.Repeat(" ", lw-runeLen(label)))
 		s = fit(s+tail, width)
 		if color && a.Level > 0 && strings.HasSuffix(s, tail) {

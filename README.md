@@ -61,10 +61,15 @@ cs
 | `cs account login <name>` | Sign in again. |
 | `cs account list` | Accounts, who each is signed in as, and whether the login is current. |
 | `cs account remove <name>` | Sign out and delete the account's directory. Shared history is untouched. |
-| `cs new [-a account] [-n name] [-- claude args]` | Start a session in the current directory. |
-| `cs resume [session] [-a account] [--force] [-- claude args]` | Continue a session under any account. With no session, pick from this project's. |
+| `cs new [-a account] [-n name] [--prompt text] [-- claude flags]` | Start a session in the current directory. |
+| `cs resume [session] [-a account] [--force] [-- claude flags]` | Continue a session under any account. With no session, pick from this project's. |
 | `cs switch <session> <account> [--force]` | Move a running session to another account. Waits for the current turn to finish unless forced. |
 | `cs project show` / `cs project set <key> <value>` | Optional settings for the current project. |
+
+Flags after `--` go to `claude` and are repeated every time the session is
+relaunched for a switch, so put only flags there (`-- --model opus`). Give a
+first message with `--prompt`; it is sent once. `cs` sets `--resume`,
+`--session-id` and `--settings` itself and refuses them after `--`.
 
 A session is named by its id, the start of its id, or its name. With no
 `-a`, `cs` uses the account the session last ran under, then the project's
@@ -161,6 +166,9 @@ write, the session still runs and the dashboard shows it as
 - MCP servers added with `claude mcp add` at user or local scope are per
   account. Project-level servers and permissions follow the session.
 - A project may ask for trust once per account.
+- If an account's directory already holds its own `settings.json` or
+  similar where a link to the shared one belongs, `cs` warns and carries on
+  with the private copy. A private history directory is refused.
 - No automatic account rotation: every switch is your command.
 - The transcript format is internal to Claude Code. If it changes, task
   progress shows `—` until the parser is updated.
