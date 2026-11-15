@@ -219,5 +219,4 @@ Run them once before first use and again after upgrading Claude Code;
 make test
 ```
 
-Tests use `testdata/fakeclaude`; none needs a login or the network. The
-design is in `docs/superpowers/specs/`.
+Tests use `testdata/fakeclaude`; none needs a login or the network.
