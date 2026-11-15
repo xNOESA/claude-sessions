@@ -5,13 +5,6 @@ Any account can start a session, continue one another account began, or take
 over a running one, and a dashboard shows every session, its account, usage
 and progress.
 
-> **Status: early.** The three proof scripts in `proofs/` passed on the
-> owner's Mac on 2026-11-14 (see `docs/acceptance.md`). The automated tests
-> use a stand-in for `claude`; the two-account checklist in
-> `docs/acceptance.md` has not been run yet. Re-run the proofs after a
-> Claude Code upgrade: they cover behaviour its documentation does not
-> promise.
-
 ## How it works
 
 - `~/.claude` stays as it is. It is the shared history and the `default`
@@ -210,6 +203,15 @@ write, the session still runs and the dashboard shows it as
   figures fall back to what running sessions report.
 - The transcript format is internal to Claude Code. If it changes, task
   progress shows `—` until the parser is updated.
+
+## Compatibility
+
+`cs` relies on a few Claude Code behaviours that its documentation does not
+promise: resuming a session under a different config directory, hooks and a
+status line passed with `--settings`, and where the signed-in account is
+recorded. The scripts in `proofs/` check each one against real accounts.
+Run them once before first use and again after upgrading Claude Code;
+`docs/acceptance.md` explains what to do if one fails.
 
 ## Development
 
