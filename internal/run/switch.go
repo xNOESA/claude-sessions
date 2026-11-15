@@ -121,6 +121,7 @@ func (w *wrapper) start(l *live, acct accounts.Account, resume bool) error {
 	ident := accounts.ResolveIdentity(acct.ConfigDir)
 	_ = store.UpdateSession(w.r.P, w.id, func(s *store.Session) {
 		s.Profile, s.Identity, s.AccountKey = acct.Name, ident, ident.Key(acct.Name)
+		s.NoteAccount(s.AccountKey, time.Now())
 		s.State = store.StateStarting
 		s.SwitchTo, s.SwitchForce = "", false
 	})

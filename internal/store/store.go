@@ -83,6 +83,40 @@ type Session struct {
 	Tasks                                      TaskProgress
 	SwitchTo                                   string
 	SwitchForce                                bool
+	// Spans records which account the session ran under from when, so its
+	// usage can be attributed after it moves between accounts.
+	Spans []AccountSpan `json:",omitempty"`
+}
+
+// AccountSpan marks the moment a session started running under an account.
+type AccountSpan struct {
+	Key  string
+	From time.Time
+}
+
+// NoteAccount records that the session is on the account with this usage
+// key from at onwards. Repeating the current account adds nothing.
+func (s *Session) NoteAccount(key string, at time.Time) {
+	if key == "" {
+		return
+	}
+	if n := len(s.Spans); n > 0 && s.Spans[n-1].Key == key {
+		return
+	}
+	s.Spans = append(s.Spans, AccountSpan{Key: key, From: at})
+}
+
+// AccountAt returns the usage key of the account the session was on at t,
+// or "" for a time before cs first saw the session.
+func (s *Session) AccountAt(t time.Time) string {
+	key := ""
+	for _, sp := range s.Spans {
+		if sp.From.After(t) {
+			break
+		}
+		key = sp.Key
+	}
+	return key
 }
 
 // Window is one rate-limit window.

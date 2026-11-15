@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"claude-sessions/internal/paths"
 )
@@ -129,5 +130,25 @@ func TestUsageRoundTrip(t *testing.T) {
 	us := LoadUsage(p)
 	if len(us) != 1 || us[0].FiveHour.UsedPct != 62 || us[0].SevenDay != nil {
 		t.Fatalf("got %+v", us)
+	}
+}
+
+func TestNoteAccountRecordsChangesOnly(t *testing.T) {
+	var s Session
+	at := time.Date(2026, 11, 14, 10, 0, 0, 0, time.UTC)
+	s.NoteAccount("a", at)
+	s.NoteAccount("a", at.Add(time.Minute)) // same account again: no new span
+	s.NoteAccount("b", at.Add(time.Hour))
+	s.NoteAccount("", at.Add(2*time.Hour)) // unknown: ignored
+	if len(s.Spans) != 2 || s.Spans[0].Key != "a" || !s.Spans[0].From.Equal(at) || s.Spans[1].Key != "b" {
+		t.Fatalf("spans = %+v", s.Spans)
+	}
+	for _, c := range []struct {
+		at   time.Time
+		want string
+	}{{at.Add(-time.Hour), ""}, {at, "a"}, {at.Add(30 * time.Minute), "a"}, {at.Add(time.Hour), "b"}, {at.Add(5 * time.Hour), "b"}} {
+		if got := s.AccountAt(c.at); got != c.want {
+			t.Errorf("AccountAt(%v) = %q, want %q", c.at.Sub(at), got, c.want)
+		}
 	}
 }

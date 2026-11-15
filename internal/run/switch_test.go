@@ -191,3 +191,20 @@ func TestTerminalClosedRightAfterSwitchDoesNotRelaunch(t *testing.T) {
 		t.Errorf("session = %+v", got)
 	}
 }
+
+func TestSwitchRecordsWhichAccountWhen(t *testing.T) {
+	f := newFixture(t)
+	s, _ := f.startAsync(func() int { return f.r.New(Opts{Account: "default"}) })
+	if len(s.Spans) != 1 || s.Spans[0].Key != s.AccountKey || s.AccountKey == "" {
+		t.Fatalf("at launch: key %q spans %+v", s.AccountKey, s.Spans)
+	}
+	first := s.Spans[0]
+	if _, err := Switch(f.p, s.ID, "work", false); err != nil {
+		t.Fatal(err)
+	}
+	f.waitLaunches(2, 8*time.Second)
+	got := f.waitState(store.StateIdle)
+	if len(got.Spans) != 2 || got.Spans[0] != first || got.Spans[1].Key != got.AccountKey || got.Spans[1].Key == first.Key || got.Spans[1].From.Before(first.From) {
+		t.Errorf("after switch: key %q spans %+v", got.AccountKey, got.Spans)
+	}
+}

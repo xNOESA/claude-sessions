@@ -209,6 +209,7 @@ func statusline(p paths.Paths, in input, getenv func(string) string) string {
 		}
 		s.Identity = id
 		s.AccountKey = id.Key(s.Profile)
+		s.NoteAccount(s.AccountKey, time.Now())
 		profile = s.Profile
 	})
 	if err != nil {

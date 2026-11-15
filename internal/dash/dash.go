@@ -39,6 +39,7 @@ const (
 type Row struct {
 	ID, Project, Session, State, Account, Profile string
 	FiveHour, Week, Ctx, Task, Plan               string
+	Models                                        string // models the session used, with cost
 	FiveHourLevel, WeekLevel                      int
 	Level                                         int // 0 normal, 1 amber, 2 red
 	Running                                       bool
@@ -62,6 +63,14 @@ type AccountRow struct {
 	Active                 int    // running sessions on this account
 	Note                   string // shown instead of bars when there is nothing to draw
 	Bars                   []Bar
+	ByModel                []ModelWindow // what each model cost on this account, per window
+}
+
+// ModelWindow is one account's usage by model over one limit window,
+// estimated from the session histories on this machine.
+type ModelWindow struct {
+	Label string // "5h" or "7d"
+	Text  string
 }
 
 // UsageCell formats one rate-limit window: a dash when never seen, "reset"
@@ -149,6 +158,177 @@ func untilText(d time.Duration) string {
 	return fmt.Sprintf("%dm", mins)
 }
 
+// dollars formats a cost; anything under a cent is shown as such, not $0.00.
+func dollars(v float64) string {
+	if v > 0 && v < 0.005 {
+		return "<$0.01"
+	}
+	return fmt.Sprintf("$%.2f", v)
+}
+
+func tokens(n int64) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1e6)
+	case n >= 1000:
+		return fmt.Sprintf("%.0fk", float64(n)/1e3)
+	}
+	return strconv.FormatInt(n, 10)
+}
+
+// modelUse is one model family's accumulated cost and output tokens.
+type modelUse struct {
+	cost    float64
+	hasCost bool
+	out     int64
+}
+
+// modelsText lists model families, most expensive first. Costs are what
+// Claude Code computes at API prices; approx marks estimated shares.
+func modelsText(by map[string]*modelUse, approx bool) string {
+	names := make([]string, 0, len(by))
+	for n := range by {
+		names = append(names, n)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		a, b := by[names[i]], by[names[j]]
+		if a.cost != b.cost {
+			return a.cost > b.cost
+		}
+		if a.out != b.out {
+			return a.out > b.out
+		}
+		return names[i] < names[j]
+	})
+	mark := ""
+	if approx {
+		mark = "≈"
+	}
+	parts := make([]string, 0, len(names))
+	for _, n := range names {
+		u := by[n]
+		if u.hasCost {
+			parts = append(parts, n+" "+mark+dollars(u.cost))
+		} else {
+			parts = append(parts, n+" "+tokens(u.out)+" out")
+		}
+	}
+	return strings.Join(parts, " · ")
+}
+
+// sessionModels is the MODELS cell for one session.
+func sessionModels(path string) string {
+	if path == "" {
+		return dash
+	}
+	by := map[string]*modelUse{}
+	for _, t := range transcript.SessionModels(path) {
+		u := by[transcript.ModelName(t.Model)]
+		if u == nil {
+			u = &modelUse{}
+			by[transcript.ModelName(t.Model)] = u
+		}
+		u.cost += t.CostUSD
+		u.hasCost = u.hasCost || t.HasCost
+		u.out += t.Out
+	}
+	if len(by) == 0 {
+		return dash
+	}
+	return modelsText(by, false)
+}
+
+const (
+	fiveHours = 5 * time.Hour
+	sevenDays = 7 * 24 * time.Hour
+)
+
+// windowStart is when a limit window began: its length before the reset
+// when that is known, otherwise that long ago.
+func windowStart(w *store.Window, length time.Duration, now time.Time) time.Time {
+	if w != nil && w.ResetsAt.After(now) {
+		return w.ResetsAt.Add(-length)
+	}
+	return now.Add(-length)
+}
+
+// byModel works out, for each account, what each model cost in its 5-hour
+// and 7-day windows. A session's cost per model is known exactly; it is
+// shared between requests by their size, and each request goes to the
+// account the session was on at the time. Sessions cs never ran are counted
+// against the default account, where plain claude runs.
+func byModel(sessions map[string]store.Session, transcripts map[string]transcript.Info,
+	starts map[string][2]time.Time, defaultKey string, now time.Time) map[string][]ModelWindow {
+	acc := map[string]*[2]map[string]*modelUse{}
+	for key := range starts {
+		acc[key] = &[2]map[string]*modelUse{{}, {}}
+	}
+	oldest := now.Add(-sevenDays - time.Hour)
+	for id, info := range transcripts {
+		if info.ModTime.Before(oldest) {
+			continue
+		}
+		reqs := transcript.Requests(info.Path)
+		if len(reqs) == 0 {
+			continue
+		}
+		cost := map[string]float64{}
+		for _, t := range transcript.SessionModels(info.Path) {
+			if t.HasCost {
+				cost[t.Model] = t.CostUSD
+			}
+		}
+		weight := map[string]float64{}
+		for _, r := range reqs {
+			weight[r.Model] += r.Weight()
+		}
+		s, managed := sessions[id]
+		for _, r := range reqs {
+			if r.At.After(now) {
+				continue
+			}
+			key := defaultKey
+			if managed {
+				switch k := s.AccountAt(r.At); {
+				case k != "":
+					key = k
+				case len(s.Spans) == 0 && s.AccountKey != "":
+					key = s.AccountKey // recorded before spans existed
+				}
+			}
+			a, ok := acc[key]
+			if !ok {
+				continue
+			}
+			for i, start := range starts[key] {
+				if r.At.Before(start) {
+					continue
+				}
+				name := transcript.ModelName(r.Model)
+				u := a[i][name]
+				if u == nil {
+					u = &modelUse{}
+					a[i][name] = u
+				}
+				u.out += r.Out
+				if c, ok := cost[r.Model]; ok && weight[r.Model] > 0 {
+					u.cost += c * r.Weight() / weight[r.Model]
+					u.hasCost = true
+				}
+			}
+		}
+	}
+	out := map[string][]ModelWindow{}
+	for key, a := range acc {
+		for i, label := range []string{"5h", "7d"} {
+			if len(a[i]) > 0 {
+				out[key] = append(out[key], ModelWindow{Label: label, Text: modelsText(a[i], true)})
+			}
+		}
+	}
+	return out
+}
+
 func money(x *store.ExtraUsage) string {
 	if x.Currency == "" || strings.EqualFold(x.Currency, "USD") {
 		return fmt.Sprintf("$%.2f / $%.2f", x.Used, x.Limit)
@@ -221,8 +401,10 @@ func Build(p paths.Paths, now time.Time, all bool) ([]Row, []AccountRow) {
 
 	var entries []entry
 	seen := map[string]bool{}
+	states := map[string]store.Session{}
 	for _, s := range store.LoadSessions(p) {
 		seen[s.ID] = true
+		states[s.ID] = s
 		info := transcripts[s.ID]
 		running := s.Managed && store.IsLocked(p, s.ID)
 		active := s.UpdatedAt
@@ -238,7 +420,7 @@ func Build(p paths.Paths, now time.Time, all bool) ([]Row, []AccountRow) {
 		}
 		pi := projOf(root)
 		r := Row{ID: s.ID, Project: filepath.Base(root), Profile: s.Profile, Running: running,
-			Ctx: dash, Task: taskCell(s.Tasks), Plan: pi.plan}
+			Ctx: dash, Task: taskCell(s.Tasks), Plan: pi.plan, Models: sessionModels(info.Path)}
 		if root == "" {
 			r.Project = dash
 		}
@@ -289,7 +471,7 @@ func Build(p paths.Paths, now time.Time, all bool) ([]Row, []AccountRow) {
 		}
 		root := rootOf(info.Cwd)
 		r := Row{ID: id, Project: filepath.Base(root), Session: info.Name, State: "unmanaged",
-			Account: dash, FiveHour: dash, Week: dash, Ctx: dash,
+			Account: dash, FiveHour: dash, Week: dash, Ctx: dash, Models: sessionModels(info.Path),
 			Task: taskCell(transcript.Tasks(info.Path)), Plan: projOf(root).plan}
 		if root == "" {
 			r.Project = dash
@@ -320,8 +502,21 @@ func Build(p paths.Paths, now time.Time, all bool) ([]Row, []AccountRow) {
 			active[e.key]++
 		}
 	}
+	registered := accounts.List(p)
+	starts := map[string][2]time.Time{}
+	defaultKey := ""
+	for _, a := range registered {
+		key := accounts.ResolveIdentity(a.ConfigDir).Key(a.Name)
+		u := usage[key]
+		starts[key] = [2]time.Time{windowStart(u.FiveHour, fiveHours, now), windowStart(u.SevenDay, sevenDays, now)}
+		if a.Name == paths.DefaultAccount {
+			defaultKey = key
+		}
+	}
+	models := byModel(states, transcripts, starts, defaultKey, now)
+
 	var accts []AccountRow
-	for _, a := range accounts.List(p) {
+	for _, a := range registered {
 		id := accounts.ResolveIdentity(a.ConfigDir)
 		key := id.Key(a.Name)
 		u, have := usage[key]
@@ -370,6 +565,7 @@ func Build(p paths.Paths, now time.Time, all bool) ([]Row, []AccountRow) {
 		default:
 			ar.Note = "usage not seen yet"
 		}
+		ar.ByModel = models[key]
 		accts = append(accts, ar)
 	}
 	return rows, accts
@@ -469,7 +665,7 @@ func RenderTable(w io.Writer, rows []Row, accts []AccountRow, width int, color b
 	if len(rows) == 0 {
 		line(fit("No sessions yet. Start one in a project directory with `cs new`.", width))
 	} else {
-		head := []string{"PROJECT", "SESSION", "STATE", "ACCOUNT", "5h", "WEEK", "CTX", "TASK", "PLAN"}
+		head := []string{"PROJECT", "SESSION", "STATE", "ACCOUNT", "5h", "WEEK", "CTX", "MODELS", "TASK", "PLAN"}
 		const (
 			cProject = iota
 			cSession
@@ -478,6 +674,7 @@ func RenderTable(w io.Writer, rows []Row, accts []AccountRow, width int, color b
 			c5h
 			cWeek
 			cCtx
+			cModels
 			cTask
 			cPlan
 		)
@@ -487,7 +684,7 @@ func RenderTable(w io.Writer, rows []Row, accts []AccountRow, width int, color b
 			widths[i] = runeLen(h)
 		}
 		for i, r := range rows {
-			cells[i] = []string{r.Project, r.Session, r.State, r.Account, r.FiveHour, r.Week, r.Ctx, r.Task, r.Plan}
+			cells[i] = []string{r.Project, r.Session, r.State, r.Account, r.FiveHour, r.Week, r.Ctx, r.Models, r.Task, r.Plan}
 			for c := range cells[i] {
 				cells[i][c] = clean(cells[i][c])
 			}
@@ -522,12 +719,15 @@ func RenderTable(w io.Writer, rows []Row, accts []AccountRow, width int, color b
 		}
 		// Shorten free text first; on a narrow terminal give up the context
 		// column before squeezing harder, so account, usage, task and plan stay.
-		free := []int{cTask, cSession, cAccount}
+		free := []int{cTask, cSession, cAccount, cModels}
 		shrink(free, 8)
 		if total() > width {
 			hidden[cCtx] = true
 		}
 		shrink(free, 5)
+		if total() > width {
+			hidden[cModels] = true // still listed per account below
+		}
 		shrink([]int{cTask, cSession, cAccount, cProject, cPlan, cState}, 4)
 		render := func(vals []string, codes []string) string {
 			var b strings.Builder
@@ -633,10 +833,21 @@ func RenderTable(w io.Writer, rows []Row, accts []AccountRow, width int, color b
 		}
 		line(head)
 
+		modelLines := func() {
+			for _, m := range a.ByModel {
+				plainLine := "   models " + m.Label + "  " + clean(m.Text)
+				if !color || runeLen(plainLine) > width {
+					line(fit(plainLine, width))
+					continue
+				}
+				line("   " + paint("models "+m.Label, ansiDim) + "  " + clean(m.Text))
+			}
+		}
 		if len(a.Bars) == 0 {
 			if a.Note != "" {
 				line(fit("   "+paint(clean(a.Note), ansiDim), width+len(paint("", ansiDim))))
 			}
+			modelLines()
 			continue
 		}
 		labelW, detailW := 2, 0
@@ -678,6 +889,7 @@ func RenderTable(w io.Writer, rows []Row, accts []AccountRow, width int, color b
 				paint(strings.Repeat("━", filled), code), paint(strings.Repeat("─", barW-filled), ansiDim),
 				paint(pctText, code), b.Detail))
 		}
+		modelLines()
 	}
 }
 

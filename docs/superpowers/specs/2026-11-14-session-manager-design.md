@@ -397,3 +397,25 @@ reading and records the reason. This supersedes the earlier limit that an
 idle account could only show its last-known usage. `get_usage` is not in the
 public documentation; if it goes away, the 5-hour and 7-day figures still
 arrive from running sessions.
+
+## Usage by model (added 2026-11-15 at the owner's request)
+
+Two views, both read from the session histories on this machine:
+
+- A MODELS column per session: each model family the session and its
+  subagents used, with the cost from the latest `cost-state` record Claude
+  Code writes in the transcript (exact, at API prices). Without such a
+  record, output tokens are shown instead.
+- Under each account, `models 5h` and `models 7d`: an estimate of what each
+  model cost on that account within its current limit windows (the window
+  length before the known reset time, else that long ago). A session's
+  per-model cost is shared between its requests by price-weighted token
+  count (output 5x, cache write 1.25x, cache read 0.1x of input) and each
+  request is attributed to the account the session was on at that time.
+
+To make that attribution possible, a session's state records an account
+span each time it starts under a different account (launch, switch, or a
+login inside the session). Requests from before the first span, and
+sessions never run through `cs`, count against the default account.
+Histories are read incrementally, so the live dashboard only parses what
+was appended since the last redraw. Usage on other machines is not visible.

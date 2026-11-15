@@ -462,3 +462,127 @@ func TestSmallUsageStillShowsOnBar(t *testing.T) {
 		t.Errorf("a non-zero reading should fill at least one cell: %q", b.String())
 	}
 }
+
+func reqLine(id, model string, at time.Time, out int) string {
+	b, _ := json.Marshal(map[string]any{
+		"type": "assistant", "sessionId": "s", "cwd": "/work/my proj", "timestamp": at.Format("2006-01-02T15:04:05.000Z"),
+		"message": map[string]any{"id": id, "model": model, "role": "assistant", "content": []any{},
+			"usage": map[string]int{"input_tokens": 10, "output_tokens": out, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}},
+	})
+	return string(b) + "\n"
+}
+
+func costLine(models map[string]float64) string {
+	mu := map[string]any{}
+	for m, c := range models {
+		mu[m] = map[string]any{"costUSD": c}
+	}
+	b, _ := json.Marshal(map[string]any{"type": "cost-state", "sessionId": "s", "modelUsage": mu})
+	return string(b) + "\n"
+}
+
+func (w *world) history(id, body string) string {
+	dir := filepath.Join(w.p.ClaudeDir, "projects", "-work-my-proj")
+	os.MkdirAll(dir, 0o700)
+	f := filepath.Join(dir, id+".jsonl")
+	if err := os.WriteFile(f, []byte(body), 0o600); err != nil {
+		w.t.Fatal(err)
+	}
+	return f
+}
+
+func TestBuildSessionModelsColumn(t *testing.T) {
+	w := newWorld(t)
+	w.history("s-cost", reqLine("a", "claude-fable-5-2", now, 240000)+reqLine("b", "claude-haiku-5-5", now, 900)+
+		costLine(map[string]float64{"claude-fable-5-2": 33.8345, "claude-haiku-5-5": 0.0637, "claude-sonnet-5-5": 0.004}))
+	w.session("s-cost", func(s *store.Session) {})
+	w.lock("s-cost")
+	w.history("s-nocost", reqLine("a", "claude-fable-5-2", now, 1900000)+reqLine("b", "claude-haiku-5-5", now, 300))
+	w.session("s-nocost", func(s *store.Session) {})
+	w.lock("s-nocost")
+	w.session("s-none", func(s *store.Session) {})
+	w.lock("s-none")
+	// A session cs never managed still shows what it used.
+	w.history("aaaa1111-0000-4000-8000-000000000001", reqLine("a", "claude-opus-4-1-20250805", now, 5)+costLine(map[string]float64{"claude-opus-4-1-20250805": 2}))
+
+	rows, _ := Build(w.p, time.Now(), false)
+	m := byID(rows)
+	for id, want := range map[string]string{
+		"s-cost":                               "Fable $33.83 · Haiku $0.06 · Sonnet <$0.01",
+		"s-nocost":                             "Fable 1.9M out · Haiku 300 out",
+		"s-none":                               "—",
+		"aaaa1111-0000-4000-8000-000000000001": "Opus $2.00",
+	} {
+		if m[id].Models != want {
+			t.Errorf("%s models = %q, want %q", id, m[id].Models, want)
+		}
+	}
+}
+
+func TestBuildAccountByModel(t *testing.T) {
+	w := newWorld(t)
+	work, _ := accounts.Create(w.p, "work")
+	w.identity(work.ConfigDir, "w@other.org", "acc-w", "org-other")
+	dKey, wKey := "org-acme_acc-d", "org-other_acc-w"
+	at := func(h, m int) time.Time { return time.Date(2026, 11, 14, h, m, 0, 0, time.UTC) }
+
+	// One session that moved from default to work at 11:00. Three Fable
+	// requests of equal size share its $10; one Haiku request cost $1.
+	w.history("moved", reqLine("f0", "claude-fable-5-2", at(6, 0), 100)+ // before cs saw the session
+		reqLine("f1", "claude-fable-5-2", at(9, 0), 100)+
+		reqLine("f2", "claude-fable-5-2", at(11, 30), 100)+
+		reqLine("h1", "claude-haiku-5-5", at(11, 40), 50)+
+		costLine(map[string]float64{"claude-fable-5-2": 10, "claude-haiku-5-5": 1}))
+	w.session("moved", func(s *store.Session) {
+		s.Profile, s.AccountKey = "work", wKey
+		s.Spans = []store.AccountSpan{{Key: dKey, From: at(8, 0)}, {Key: wKey, From: at(11, 0)}}
+	})
+	// A plain-claude session: it ran on the default login.
+	w.history("aaaa1111-0000-4000-8000-000000000001", reqLine("p1", "claude-fable-5-2", at(10, 0), 7)+costLine(map[string]float64{"claude-fable-5-2": 2}))
+	// A managed session from before spans were recorded: all on its account.
+	w.history("legacy", reqLine("l1", "claude-sonnet-5-5", at(11, 50), 7)+costLine(map[string]float64{"claude-sonnet-5-5": 0.5}))
+	w.session("legacy", func(s *store.Session) { s.Profile, s.AccountKey = "work", wKey })
+	// Too old for any window.
+	w.history("ancient", reqLine("o1", "claude-fable-5-2", at(12, 0).Add(-8*24*time.Hour), 7)+costLine(map[string]float64{"claude-fable-5-2": 99}))
+
+	// default's 5h window began at 08:00 (it resets at 13:00); work has no
+	// reading, so its windows are the last 5 hours and 7 days.
+	store.SaveUsage(w.p, store.Usage{Identity: store.Identity{Email: "d@acme.com", OrgID: "org-acme", AccountID: "acc-d", Known: true}, Profile: "default",
+		SeenAt: now, FiveHour: &store.Window{UsedPct: 10, ResetsAt: at(13, 0)}, SevenDay: &store.Window{UsedPct: 20, ResetsAt: at(12, 0).Add(24 * time.Hour)}})
+
+	_, accts := Build(w.p, now, false)
+	got := map[string][]ModelWindow{}
+	for _, a := range accts {
+		got[a.Name] = a.ByModel
+	}
+	want := map[string][]ModelWindow{
+		"default": {{Label: "5h", Text: "Fable ≈$5.33"}, {Label: "7d", Text: "Fable ≈$8.67"}},
+		"work":    {{Label: "5h", Text: "Fable ≈$3.33 · Haiku ≈$1.00 · Sonnet ≈$0.50"}, {Label: "7d", Text: "Fable ≈$3.33 · Haiku ≈$1.00 · Sonnet ≈$0.50"}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("by model =\n %+v\nwant\n %+v", got, want)
+	}
+}
+
+func TestRenderModels(t *testing.T) {
+	rows := []Row{{ID: "1", Project: "api", Session: "s", State: "idle", Account: "a@b.c", FiveHour: "1%", Week: "2%", Ctx: "3%",
+		Models: "Fable $33.83 · Haiku $0.06", Task: "—", Plan: "—", Running: true}}
+	accts := []AccountRow{{Name: "default", Label: "a@b.c", Bars: []Bar{{Label: "5h", Pct: 16, Detail: "resets 1h 2m · 21:40"}},
+		ByModel: []ModelWindow{{Label: "5h", Text: "Fable ≈$5.33"}, {Label: "7d", Text: "Fable ≈$8.67 · Haiku ≈$1.00"}}},
+		{Name: "work", Label: "w@x.y", Note: "usage not seen yet", ByModel: []ModelWindow{{Label: "7d", Text: "Sonnet ≈$0.50"}}}}
+	var b bytes.Buffer
+	RenderTable(&b, rows, accts, 160, false)
+	out := b.String()
+	for _, must := range []string{"MODELS", "Fable $33.83 · Haiku $0.06", "models 5h  Fable ≈$5.33", "models 7d  Fable ≈$8.67 · Haiku ≈$1.00", "usage not seen yet", "models 7d  Sonnet ≈$0.50"} {
+		if !strings.Contains(out, must) {
+			t.Errorf("missing %q in:\n%s", must, out)
+		}
+	}
+	b.Reset()
+	RenderTable(&b, rows, accts, 50, false)
+	for _, line := range strings.Split(strings.TrimRight(b.String(), "\n"), "\n") {
+		if n := utf8.RuneCountInString(line); n > 50 {
+			t.Errorf("line is %d wide, limit 50: %q", n, line)
+		}
+	}
+}

@@ -262,3 +262,17 @@ func TestIdlePromptNotificationKeepsIdle(t *testing.T) {
 		t.Errorf("permission prompt gave state %q, want needs_you", s.State)
 	}
 }
+
+func TestReloginInsideSessionStartsNewAccountSpan(t *testing.T) {
+	p, cfg, e := setup(t)
+	handle(p, "statusline", statusInput(""), e)
+	handle(p, "statusline", statusInput(""), e)
+	if s := session(t, p); len(s.Spans) != 1 || s.Spans[0].Key != "org1_acc1" {
+		t.Fatalf("spans = %+v", s.Spans)
+	}
+	writeIdentity(t, cfg, "other@x.y", "acc2", "org2")
+	handle(p, "statusline", statusInput(""), e)
+	if s := session(t, p); len(s.Spans) != 2 || s.Spans[1].Key != "org2_acc2" {
+		t.Errorf("spans = %+v", s.Spans)
+	}
+}

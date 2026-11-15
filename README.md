@@ -79,9 +79,9 @@ default, then asks.
 ## The dashboard
 
 ```
-PROJECT  SESSION       STATE      ACCOUNT          5h   WEEK  CTX  TASK           PLAN
-api      week-10 run   working    ana@acme.com     16%  52%   48%  3/5 fix relay  week 10/14
-site     mailer        needs you  bo@other.org     8%   3%    12%  1/2 form test  —
+PROJECT  SESSION      STATE      ACCOUNT       5h   WEEK  CTX  MODELS                      TASK           PLAN
+api      week-10 run  working    ana@acme.com  16%  52%   48%  Fable $33.83 · Haiku $0.06  3/5 fix relay  week 10/14
+site     mailer       needs you  bo@other.org  8%   3%    12%  Sonnet $1.12                1/2 form test  —
 
 ACCOUNTS
 default  ana@acme.com  [Acme] · max  · 4m ago   ● active
@@ -89,10 +89,13 @@ default  ana@acme.com  [Acme] · max  · 4m ago   ● active
    5h    ━━━━━━──────────────────────────────────  16%  resets 3h 32m · 00:10
    7d    ━━━━━━━━━━━━━━━━━━━━━───────────────────  52%  resets 1d 7h · Nov 15 03:59
    Fable ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━──────  85%  resets 1d 7h · Nov 15 04:00
+   models 5h  Fable ≈$33.83 · Haiku ≈$0.06
+   models 7d  Fable ≈$212.40 · Sonnet ≈$4.10 · Haiku ≈$0.92
 
 work     bo@other.org  [Other Org] · max  · 4m ago   ● active
    5h    ━━━─────────────────────────────────────   8%  resets 1h 2m · 21:40
    7d    ━───────────────────────────────────────   3%  resets 4d 22h · Nov 18 19:00
+   models 5h  Sonnet ≈$1.12
 ```
 
 Sessions:
@@ -100,6 +103,10 @@ Sessions:
 - **ACCOUNT** is the login the session is really using, re-read on every
   status line refresh, so a `/login` inside a session shows up.
 - **5h / WEEK** are that account's limits. Amber from 75%, red from 90%.
+- **MODELS** lists each model the session has used, subagents included,
+  with the cost Claude Code recorded for it. Costs are at API prices, so on
+  a subscription they measure how much was used, not what you paid. The
+  figure can trail a running session by a few turns.
 - **TASK** is the session's own to-do list.
 - **PLAN** is the project's plan, when one is found.
 - **STATE** `unmanaged` means the session was started with plain `claude`;
@@ -112,6 +119,12 @@ Accounts, one block each, headed by the name you pass to `-a`:
   full each window is and when it resets.
 - **● active** marks accounts with a running session; `· 4m ago` is the age
   of the reading.
+- **models 5h / 7d** estimate what each model cost on that account in its
+  current 5-hour and 7-day windows (`≈`). They come from the session
+  histories on this machine only, so use on other devices or on claude.ai is
+  not included. A session that moved between accounts is split at the
+  moment of each switch; anything from before `cs` first ran a session, and
+  sessions started with plain `claude`, count against the `default` account.
 
 Account usage is read by asking Claude Code itself: every five minutes while
 the dashboard is open, `cs` starts `claude` briefly under each account and
