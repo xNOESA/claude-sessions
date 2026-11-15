@@ -4,6 +4,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"claude-sessions/internal/paths"
 	"claude-sessions/internal/report"
@@ -14,7 +15,7 @@ const version = "0.1.0"
 const helpText = `usage: cs <command>
 
   cs                         live dashboard (same as cs status)
-  cs status [--once] [--json] [--all] [--no-refresh]
+  cs status [--once] [--json] [--all] [--no-refresh] [--no-black]
   cs account add|login|list|remove [name]
   cs new [-a account] [-n name] [--prompt text] [-- claude flags]
   cs resume [session] [-a account] [--force] [-- claude flags]
@@ -31,8 +32,12 @@ func dispatch(args []string) int {
 		return 0
 	}
 	p := paths.Resolve()
-	if len(args) == 0 {
-		return cmdStatus(p, nil)
+	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
+		fmt.Print(helpText)
+		return 0
+	}
+	if len(args) == 0 || strings.HasPrefix(args[0], "--") {
+		return cmdStatus(p, args) // `cs` and `cs --no-black` are the dashboard
 	}
 	if len(args) > 0 {
 		switch args[0] {

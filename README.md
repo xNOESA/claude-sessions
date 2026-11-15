@@ -57,7 +57,7 @@ cs
 
 | Command | What it does |
 | --- | --- |
-| `cs` or `cs status` | Live dashboard. `--once` prints it once, `--json` for scripts, `--all` includes sessions older than 24 hours. |
+| `cs` or `cs status` | Live dashboard, drawn on a black background for contrast (`--no-black` keeps your terminal's own). `--once` prints it once, `--json` for scripts, `--all` includes sessions older than 24 hours. |
 | `cs account add <name>` | Create an account and sign in to it. |
 | `cs account login <name>` | Sign in again. |
 | `cs account list` | Accounts, who each is signed in as, and whether the login is current. |

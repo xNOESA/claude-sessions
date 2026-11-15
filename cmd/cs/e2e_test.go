@@ -79,6 +79,14 @@ func TestEndToEnd(t *testing.T) {
 	if out, err := cs("version"); err != nil || !strings.HasPrefix(out, "cs ") {
 		t.Fatalf("version: %q %v", out, err)
 	}
+	for _, h := range []string{"--help", "-h", "help"} {
+		if out, err := cs(h); err != nil || !strings.Contains(out, "usage: cs <command>") {
+			t.Errorf("cs %s: %v %q", h, err, out)
+		}
+	}
+	if out, err := cs("--once", "--no-refresh"); err != nil || !strings.Contains(out, "ACCOUNTS") {
+		t.Errorf("`cs --once` should be the dashboard: %v %q", err, out)
+	}
 	if out, err := cs("account", "add", "work"); err != nil {
 		t.Fatalf("account add: %v\n%s", err, out)
 	}

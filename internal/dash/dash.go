@@ -928,14 +928,44 @@ func Once(p paths.Paths, out *os.File, all bool) {
 	RenderTable(out, rows, accts, Width(out), IsTerminal(out) && os.Getenv("NO_COLOR") == "")
 }
 
+const (
+	ansiBase    = "\x1b[40;97m"                 // black background, bright white text
+	ansiEraseEL = "\x1b[K"                      // fill the rest of the line with the background
+	ansiEnter   = "\x1b[?1049h\x1b[?25l"        // alternate screen, cursor hidden
+	ansiLeave   = "\x1b[0m\x1b[?25h\x1b[?1049l" // restore colours, cursor and the user's screen
+)
+
+// OnBlack repaints rendered output on a black background with bright text,
+// whatever the terminal's own colours are. Every colour reset in the text
+// would fall back to the terminal's background, so each one restores the
+// black one, and every line is filled to the right edge.
+func OnBlack(s string) string {
+	if s == "" {
+		return ""
+	}
+	s = strings.ReplaceAll(s, ansiReset, ansiReset+ansiBase)
+	s = strings.ReplaceAll(s, "\n", ansiEraseEL+"\n")
+	if !strings.HasSuffix(s, "\n") {
+		s += ansiEraseEL
+	}
+	return ansiBase + s
+}
+
 // Watch redraws the dashboard until interrupted. refresh, if set, is run in
 // the background (never two at once) to bring account usage up to date; it
-// decides for itself whether anything is stale.
-func Watch(p paths.Paths, out *os.File, all bool, refresh func()) {
+// decides for itself whether anything is stale. With black set (and colour
+// on) it draws on a black background, on the terminal's alternate screen so
+// the user's own screen comes back unchanged on exit.
+func Watch(p paths.Paths, out *os.File, all bool, refresh func(), black bool) {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(stop)
 	color := os.Getenv("NO_COLOR") == ""
+	black = black && color
+	if black {
+		io.WriteString(out, ansiEnter)
+		defer io.WriteString(out, ansiLeave)
+	}
 	tick := time.NewTicker(redrawEvery)
 	defer tick.Stop()
 	var refreshing atomic.Bool
@@ -948,13 +978,21 @@ func Watch(p paths.Paths, out *os.File, all bool, refresh func()) {
 		}
 		rows, accts := Build(p, time.Now(), all)
 		var b strings.Builder
-		b.WriteString("\x1b[H\x1b[2J")
 		RenderTable(&b, rows, accts, Width(out), color)
 		fmt.Fprintf(&b, "\n%s", time.Now().Format("15:04:05")+"  ctrl-c to quit")
-		io.WriteString(out, b.String())
+		frame := b.String()
+		if black {
+			// Set the colours first so clearing the screen paints it black.
+			frame = ansiBase + "\x1b[H\x1b[2J" + OnBlack(frame)
+		} else {
+			frame = "\x1b[H\x1b[2J" + frame
+		}
+		io.WriteString(out, frame)
 		select {
 		case <-stop:
-			fmt.Fprintln(out)
+			if !black {
+				fmt.Fprintln(out)
+			}
 			return
 		case <-tick.C:
 		}

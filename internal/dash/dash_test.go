@@ -586,3 +586,47 @@ func TestRenderModels(t *testing.T) {
 		}
 	}
 }
+
+func TestOnBlackKeepsBackgroundThroughEveryLine(t *testing.T) {
+	rows, accts := sampleRows()
+	var b bytes.Buffer
+	RenderTable(&b, rows, accts, 120, true)
+	out := OnBlack(b.String())
+
+	const base = "\x1b[40;97m" // black background, bright white text
+	if !strings.HasPrefix(out, base) {
+		t.Errorf("does not start by setting the background: %q", out[:20])
+	}
+	// A colour reset would drop back to the terminal's own background, so
+	// each one must put the black background straight back.
+	if n, m := strings.Count(out, "\x1b[0m"), strings.Count(out, "\x1b[0m"+base); n == 0 || n != m {
+		t.Errorf("%d resets, %d restore the background", n, m)
+	}
+	// Every line is painted to the right edge, including empty ones.
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	for i, l := range lines {
+		if !strings.HasSuffix(l, "\x1b[K") {
+			t.Errorf("line %d not filled to the edge: %q", i, l)
+		}
+	}
+	// The visible text is unchanged.
+	strip := func(s string) string {
+		var o strings.Builder
+		for i := 0; i < len(s); i++ {
+			if s[i] == 0x1b {
+				for i < len(s) && !(s[i] >= 'A' && s[i] <= 'Z' || s[i] >= 'a' && s[i] <= 'z') {
+					i++
+				}
+				continue
+			}
+			o.WriteByte(s[i])
+		}
+		return o.String()
+	}
+	if strip(out) != strip(b.String()) {
+		t.Error("OnBlack changed the text")
+	}
+	if OnBlack("") != "" {
+		t.Error("empty input should stay empty")
+	}
+}

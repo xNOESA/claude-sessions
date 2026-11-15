@@ -10,7 +10,7 @@ import (
 )
 
 func cmdStatus(p paths.Paths, args []string) int {
-	var once, asJSON, all, noRefresh bool
+	var once, asJSON, all, noRefresh, noBlack bool
 	for _, a := range args {
 		switch a {
 		case "--once":
@@ -21,8 +21,10 @@ func cmdStatus(p paths.Paths, args []string) int {
 			all = true
 		case "--no-refresh":
 			noRefresh = true
+		case "--no-black":
+			noBlack = true
 		default:
-			return fail("usage: cs status [--once] [--json] [--all] [--no-refresh]")
+			return fail("usage: cs status [--once] [--json] [--all] [--no-refresh] [--no-black]")
 		}
 	}
 	// Ask Claude Code for any account usage older than a few minutes.
@@ -43,7 +45,7 @@ func cmdStatus(p paths.Paths, args []string) int {
 	case once || !dash.IsTerminal(os.Stdout):
 		dash.Once(p, os.Stdout, all)
 	default:
-		dash.Watch(p, os.Stdout, all, refresh)
+		dash.Watch(p, os.Stdout, all, refresh, !noBlack)
 	}
 	return 0
 }
