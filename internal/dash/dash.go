@@ -929,7 +929,10 @@ func Once(p paths.Paths, out *os.File, all bool) {
 }
 
 const (
-	ansiBase    = "\x1b[40;97m"                 // black background, bright white text
+	// Colours 16 and 231 of the 256-colour palette are fixed at pure black and
+	// pure white. The basic "black" (40) is whatever the terminal theme says,
+	// often a grey that is lighter than the theme's own background.
+	ansiBase    = "\x1b[48;5;16;38;5;231m"
 	ansiEraseEL = "\x1b[K"                      // fill the rest of the line with the background
 	ansiEnter   = "\x1b[?1049h\x1b[?25l"        // alternate screen, cursor hidden
 	ansiLeave   = "\x1b[0m\x1b[?25h\x1b[?1049l" // restore colours, cursor and the user's screen

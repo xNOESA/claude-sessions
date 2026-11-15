@@ -593,7 +593,7 @@ func TestOnBlackKeepsBackgroundThroughEveryLine(t *testing.T) {
 	RenderTable(&b, rows, accts, 120, true)
 	out := OnBlack(b.String())
 
-	const base = "\x1b[40;97m" // black background, bright white text
+	const base = "\x1b[48;5;16;38;5;231m" // true black background, white text: fixed colours, not the theme's "black"
 	if !strings.HasPrefix(out, base) {
 		t.Errorf("does not start by setting the background: %q", out[:20])
 	}
