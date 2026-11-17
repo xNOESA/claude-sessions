@@ -29,6 +29,7 @@ import (
 type Opts struct {
 	Account, Name, SessionRef string
 	Force                     bool
+	Compact                   bool     // summarise under the previous account before resuming in another organization
 	Prompt                    string   // first message; sent on the first launch only
 	ClaudeArgs                []string // extra claude flags; repeated on every relaunch
 }
@@ -39,8 +40,44 @@ type Stdio struct {
 	Out, Err io.Writer
 }
 
-// Choice is one account offered when cs has to ask.
-type Choice struct{ Name, Label, Usage string }
+// Choice is one account offered when cs has to ask. Note says how its
+// organization relates to the one the session last ran under.
+type Choice struct{ Name, Label, Usage, Note string }
+
+// crossOrg reports whether two identities are known to be in different
+// organizations. Claude's earlier thinking in a session cannot be used from
+// another organization, so moving a session across is not free.
+func crossOrg(a, b store.Identity) bool {
+	return a.Known && b.Known && a.OrgID != "" && b.OrgID != "" && a.OrgID != b.OrgID
+}
+
+// sameOrg reports whether two identities are known to share an organization.
+func sameOrg(a, b store.Identity) bool {
+	return a.Known && b.Known && a.OrgID != "" && a.OrgID == b.OrgID
+}
+
+// OrgNotes marks each choice by whether it shares the organization the
+// session last ran under.
+func OrgNotes(p paths.Paths, choices []Choice, prev store.Identity) []Choice {
+	out := make([]Choice, len(choices))
+	for i, c := range choices {
+		out[i] = c
+		a, ok := accounts.Get(p, c.Name)
+		if !ok {
+			continue
+		}
+		id := accounts.ResolveIdentity(a.ConfigDir)
+		switch {
+		case sameOrg(prev, id):
+			out[i].Note = "same organization"
+		case crossOrg(prev, id):
+			out[i].Note = "other organization: earlier thinking is dropped"
+		}
+	}
+	return out
+}
+
+const crossOrgWhy = "Claude cannot reuse the thinking it did earlier in this session from another organization (the conversation itself carries over), so its next replies are slower and use more tokens"
 
 // Runner carries everything a launch depends on, so tests can supply it.
 type Runner struct {
@@ -83,7 +120,7 @@ func (r *Runner) New(o Opts) int {
 	if err != nil {
 		return r.errf("%v", err)
 	}
-	return r.launch(id, false, "", "", o)
+	return r.launch(id, false, "", store.Session{}, o)
 }
 
 // Resume continues an existing session, under any account.
@@ -130,7 +167,7 @@ func (r *Runner) Resume(o Opts) int {
 			r.Cwd = info.Cwd
 		}
 	}
-	return r.launch(info.ID, true, info.Path, prev.Profile, o)
+	return r.launch(info.ID, true, info.Path, prev, o)
 }
 
 func short(id string) string {
@@ -259,7 +296,11 @@ func (r *Runner) ask(choices []Choice) string {
 	}
 	fmt.Fprintln(r.Stdio.Err, "Which account?")
 	for i, c := range choices {
-		fmt.Fprintf(r.Stdio.Err, "  %d) %-12s %-36s %s\n", i+1, c.Name, c.Label, c.Usage)
+		note := ""
+		if c.Note != "" {
+			note = "  (" + c.Note + ")"
+		}
+		fmt.Fprintf(r.Stdio.Err, "  %d) %-12s %-36s %s%s\n", i+1, c.Name, c.Label, c.Usage, note)
 	}
 	n := r.readNumber(len(choices))
 	if n == 0 {
@@ -324,14 +365,26 @@ type wrapper struct {
 	prompt   string   // first message, consumed by the first launch
 }
 
-func (r *Runner) launch(id string, resume bool, transcriptPath, prevProfile string, o Opts) int {
+func (r *Runner) launch(id string, resume bool, transcriptPath string, prev store.Session, o Opts) int {
+	prevProfile := prev.Profile
+	// The organization the session's thinking so far belongs to. A session
+	// cs never ran was on the default login, where plain claude runs.
+	prevOrgProfile, prevIdent := prev.Profile, prev.Identity
+	if resume && prevOrgProfile == "" {
+		prevOrgProfile = paths.DefaultAccount
+		prevIdent = accounts.ResolveIdentity(r.P.ClaudeDir)
+	}
 	if f := ownedFlag(o.ClaudeArgs); f != "" {
 		return r.errf("%s is set by cs and cannot be passed to claude; use `cs resume` to continue a session", f)
 	}
 	root := project.Root(r.Cwd)
 	settings := project.Load(r.P, root)
 
-	name, err := ChooseAccount(r.P, root, o, prevProfile, settings, r.ask)
+	ask := r.ask
+	if resume {
+		ask = func(c []Choice) string { return r.ask(OrgNotes(r.P, c, prevIdent)) }
+	}
+	name, err := ChooseAccount(r.P, root, o, prevProfile, settings, ask)
 	if err != nil {
 		return r.errf("%v", err)
 	}
@@ -355,6 +408,19 @@ func (r *Runner) launch(id string, resume bool, transcriptPath, prevProfile stri
 	defer release()
 
 	w := &wrapper{r: r, id: id, root: root, settings: settings, name: o.Name, extra: o.ClaudeArgs, prompt: o.Prompt}
+	if resume && prevOrgProfile != acct.Name && !sameOrg(prevIdent, ident) {
+		from, haveFrom := accounts.Get(r.P, prevOrgProfile)
+		switch {
+		case o.Compact && haveFrom:
+			w.say("compacting the session under %s before resuming on %s…", prevOrgProfile, acct.Name)
+			if err := w.compact(from); err != nil {
+				w.say("could not compact (%v); resuming anyway", err)
+			}
+		case crossOrg(prevIdent, ident):
+			w.say("note: %s is in a different organization from %s, where this session last ran. %s. Resume with --compact to summarise it first.",
+				ident.Label(acct.Name), prevIdent.Label(prevOrgProfile), crossOrgWhy)
+		}
+	}
 	if err := os.MkdirAll(filepath.Dir(w.settingsFile()), 0o700); err != nil {
 		return r.errf("%v", err)
 	}
@@ -366,7 +432,7 @@ func (r *Runner) launch(id string, resume bool, transcriptPath, prevProfile stri
 		s.Profile, s.Identity, s.AccountKey = acct.Name, ident, ident.Key(acct.Name)
 		s.Managed, s.WrapperPID = true, os.Getpid()
 		s.State, s.StartedAt = store.StateStarting, time.Now()
-		s.SwitchTo, s.SwitchForce = "", false
+		s.SwitchTo, s.SwitchForce, s.SwitchCompact = "", false, false
 		if o.Name != "" {
 			s.Name = o.Name
 		}
@@ -411,7 +477,6 @@ func (r *Runner) strippedPresent() []string {
 
 // command builds the process for one launch of the session under acct.
 func (w *wrapper) command(acct accounts.Account, resume bool) *exec.Cmd {
-	r := w.r
 	args := []string{"--session-id", w.id}
 	if resume {
 		args = []string{"--resume", w.id}
@@ -426,6 +491,49 @@ func (w *wrapper) command(acct accounts.Account, resume bool) *exec.Cmd {
 		args = append(args, w.prompt)
 		w.prompt = ""
 	}
+	cmd := w.build(acct, args)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = w.r.Stdio.In, w.r.Stdio.Out, w.r.Stdio.Err
+	return cmd
+}
+
+const compactTimeout = 5 * time.Minute
+
+// compact summarises the session's history, running claude headless under
+// acct. Done before moving a session to another organization, it leaves no
+// earlier thinking behind for the new organization to be unable to read.
+func (w *wrapper) compact(acct accounts.Account) error {
+	cmd := w.build(acct, append([]string{"-p", "--resume", w.id}, w.extra...))
+	cmd.Stdin = strings.NewReader("/compact\n")
+	var errOut strings.Builder
+	cmd.Stdout, cmd.Stderr = io.Discard, &errOut
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	done := waitChan(cmd)
+	select {
+	case err := <-done:
+		if err != nil {
+			if msg := strings.TrimSpace(errOut.String()); msg != "" {
+				if len(msg) > 200 {
+					msg = msg[len(msg)-200:]
+				}
+				return fmt.Errorf("%v: %s", err, msg)
+			}
+			return err
+		}
+		return nil
+	case <-time.After(compactTimeout):
+		_ = cmd.Process.Kill()
+		<-done
+		return errors.New("timed out")
+	}
+}
+
+// build prepares claude with args under acct: through the project's launch
+// wrapper if it has one, in the session's directory, with the account's
+// environment. The caller attaches stdio.
+func (w *wrapper) build(acct accounts.Account, args []string) *exec.Cmd {
+	r := w.r
 
 	var cmd *exec.Cmd
 	if tmpl := w.settings.Launch; tmpl != "" {
@@ -443,7 +551,6 @@ func (w *wrapper) command(acct accounts.Account, resume bool) *exec.Cmd {
 		cmd = exec.Command(r.P.ClaudeBin, args...)
 	}
 	cmd.Dir = r.Cwd
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = r.Stdio.In, r.Stdio.Out, r.Stdio.Err
 
 	env := make([]string, 0, len(r.Environ)+6)
 	for _, kv := range r.Environ {
@@ -521,7 +628,7 @@ func (w *wrapper) run(acct accounts.Account, resume bool) int {
 func (w *wrapper) finish() {
 	_ = store.UpdateSession(w.r.P, w.id, func(s *store.Session) {
 		s.State, s.WrapperPID = store.StateEnded, 0
-		s.SwitchTo, s.SwitchForce = "", false
+		s.SwitchTo, s.SwitchForce, s.SwitchCompact = "", false, false
 	})
 	_ = os.Remove(w.settingsFile())
 }

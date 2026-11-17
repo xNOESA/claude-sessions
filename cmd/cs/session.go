@@ -33,6 +33,8 @@ func parseLaunch(args []string) (o run.Opts, positional []string, ok bool) {
 			}
 			i++
 			o.Prompt = args[i]
+		case a == "--compact":
+			o.Compact = true
 		case a == "--force":
 			o.Force = true
 		case len(a) > 0 && a[0] == '-':
@@ -72,7 +74,7 @@ func cmdNew(p paths.Paths, args []string) int {
 func cmdResume(p paths.Paths, args []string) int {
 	o, pos, ok := parseLaunch(args)
 	if !ok || len(pos) > 1 {
-		return fail("usage: cs resume [session] [-a account] [--force] [--prompt text] [-- claude flags]")
+		return fail("usage: cs resume [session] [-a account] [--compact] [--force] [--prompt text] [-- claude flags]")
 	}
 	if len(pos) == 1 {
 		o.SessionRef = pos[0]

@@ -27,7 +27,7 @@ func TestSwitchIdleSession(t *testing.T) {
 	f := newFixture(t)
 	s, stop := f.startAsync(func() int { return f.r.New(Opts{Account: "default", Name: "demo"}) })
 
-	msg, err := Switch(f.p, "demo", "work", false)
+	msg, err := Switch(f.p, "demo", "work", SwitchOpts{AllowCrossOrg: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestSwitchWaitsForIdle(t *testing.T) {
 	s, _ := f.startAsync(func() int { return f.r.New(Opts{Account: "default"}) })
 	store.UpdateSession(f.p, s.ID, func(x *store.Session) { x.State = store.StateWorking })
 
-	msg, err := Switch(f.p, s.ID, "work", false)
+	msg, err := Switch(f.p, s.ID, "work", SwitchOpts{AllowCrossOrg: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestSwitchForce(t *testing.T) {
 	f := newFixture(t)
 	s, _ := f.startAsync(func() int { return f.r.New(Opts{Account: "default"}) })
 	store.UpdateSession(f.p, s.ID, func(x *store.Session) { x.State = store.StateWorking })
-	msg, err := Switch(f.p, s.ID[:8], "work", true)
+	msg, err := Switch(f.p, s.ID[:8], "work", SwitchOpts{Force: true, AllowCrossOrg: true})
 	if err != nil || msg != "switching now" {
 		t.Fatalf("%q %v", msg, err)
 	}
@@ -96,7 +96,7 @@ func TestSwitchToSignedOutAccount(t *testing.T) {
 	s, _ := f.startAsync(func() int { return f.r.New(Opts{Account: "default"}) })
 	os.WriteFile(filepath.Join(f.p.AccountDir("work"), "loggedout"), nil, 0o600)
 
-	_, err := Switch(f.p, s.ID, "work", false)
+	_, err := Switch(f.p, s.ID, "work", SwitchOpts{AllowCrossOrg: true})
 	if err == nil || !strings.Contains(err.Error(), "work") || !strings.Contains(err.Error(), "signed in") {
 		t.Fatalf("err = %v", err)
 	}
@@ -113,17 +113,17 @@ func TestSwitchRefusals(t *testing.T) {
 	f := newFixture(t)
 	s, _ := f.startAsync(func() int { return f.r.New(Opts{Account: "default"}) })
 
-	if _, err := Switch(f.p, s.ID, "nope", false); err == nil || !strings.Contains(err.Error(), `"nope"`) {
+	if _, err := Switch(f.p, s.ID, "nope", SwitchOpts{AllowCrossOrg: true}); err == nil || !strings.Contains(err.Error(), `"nope"`) {
 		t.Errorf("unknown account: %v", err)
 	}
-	if _, err := Switch(f.p, s.ID, "default", false); err == nil || !strings.Contains(err.Error(), "already on") {
+	if _, err := Switch(f.p, s.ID, "default", SwitchOpts{AllowCrossOrg: true}); err == nil || !strings.Contains(err.Error(), "already on") {
 		t.Errorf("same account: %v", err)
 	}
 	project.Set(f.p, f.r.Cwd, "allowed_accounts", "d@acme.com")
-	if _, err := Switch(f.p, s.ID, "work", false); err == nil || !strings.Contains(err.Error(), "not allowed") {
+	if _, err := Switch(f.p, s.ID, "work", SwitchOpts{AllowCrossOrg: true}); err == nil || !strings.Contains(err.Error(), "not allowed") {
 		t.Errorf("disallowed account: %v", err)
 	}
-	if _, err := Switch(f.p, "no-such-session", "work", false); err == nil {
+	if _, err := Switch(f.p, "no-such-session", "work", SwitchOpts{AllowCrossOrg: true}); err == nil {
 		t.Error("unknown session accepted")
 	}
 	if got := f.onlySession(); got.SwitchTo != "" {
@@ -137,7 +137,7 @@ func TestSwitchFallsBack(t *testing.T) {
 	// "work" passes the sign-in check but claude fails to start under it.
 	os.WriteFile(filepath.Join(f.p.AccountDir("work"), "failstart"), nil, 0o600)
 
-	if _, err := Switch(f.p, s.ID, "work", false); err != nil {
+	if _, err := Switch(f.p, s.ID, "work", SwitchOpts{AllowCrossOrg: true}); err != nil {
 		t.Fatal(err)
 	}
 	l := f.waitLaunches(3, 10*time.Second)
@@ -162,7 +162,7 @@ func TestSwitchFallsBack(t *testing.T) {
 func TestSwitchUnmanaged(t *testing.T) {
 	f := newFixture(t)
 	f.transcriptFor(oldID, time.Hour)
-	_, err := Switch(f.p, oldID, "work", false)
+	_, err := Switch(f.p, oldID, "work", SwitchOpts{AllowCrossOrg: true})
 	if err == nil || !strings.Contains(err.Error(), "not running under cs") || !strings.Contains(err.Error(), "cs resume") {
 		t.Errorf("err = %v", err)
 	}
@@ -173,7 +173,7 @@ func TestTerminalClosedRightAfterSwitchDoesNotRelaunch(t *testing.T) {
 	// mistaken for the new account failing to start.
 	f := newFixture(t, "FAKE_TERM_EXIT=143")
 	s, stop := f.startAsync(func() int { return f.r.New(Opts{Account: "default"}) })
-	if _, err := Switch(f.p, s.ID, "work", false); err != nil {
+	if _, err := Switch(f.p, s.ID, "work", SwitchOpts{AllowCrossOrg: true}); err != nil {
 		t.Fatal(err)
 	}
 	if l := f.waitLaunches(2, 8*time.Second); len(l) != 2 {
@@ -199,7 +199,7 @@ func TestSwitchRecordsWhichAccountWhen(t *testing.T) {
 		t.Fatalf("at launch: key %q spans %+v", s.AccountKey, s.Spans)
 	}
 	first := s.Spans[0]
-	if _, err := Switch(f.p, s.ID, "work", false); err != nil {
+	if _, err := Switch(f.p, s.ID, "work", SwitchOpts{AllowCrossOrg: true}); err != nil {
 		t.Fatal(err)
 	}
 	f.waitLaunches(2, 8*time.Second)

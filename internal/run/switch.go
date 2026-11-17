@@ -68,9 +68,25 @@ func findRunning(p paths.Paths, ref string) (store.Session, error) {
 	return store.Session{}, fmt.Errorf("no running session matches %q (see `cs status`)", ref)
 }
 
+// SwitchOpts are the choices for one switch.
+type SwitchOpts struct {
+	Force         bool // do not wait for the current turn to finish
+	Compact       bool // summarise under the current account first
+	AllowCrossOrg bool // the user accepts losing earlier thinking
+}
+
+// CrossOrgError is returned when a switch would move a session to another
+// organization and the user has not said how to handle that.
+type CrossOrgError struct{ From, To string }
+
+func (e *CrossOrgError) Error() string {
+	return fmt.Sprintf("%s is in a different organization from %s. %s. Pass --compact to summarise the session first, or --yes to switch as it is.",
+		e.To, e.From, crossOrgWhy)
+}
+
 // Switch asks the wrapper running a session to move it to another account.
 // It validates first, so a refused switch never disturbs the session.
-func Switch(p paths.Paths, ref, account string, force bool) (string, error) {
+func Switch(p paths.Paths, ref, account string, o SwitchOpts) (string, error) {
 	s, err := findRunning(p, ref)
 	if err != nil {
 		return "", err
@@ -82,13 +98,17 @@ func Switch(p paths.Paths, ref, account string, force bool) (string, error) {
 	if root == "" {
 		root = project.Root(s.Cwd)
 	}
-	if _, _, err := validateTarget(p, root, account, project.Load(p, root)); err != nil {
+	_, ident, err := validateTarget(p, root, account, project.Load(p, root))
+	if err != nil {
 		return "", err
+	}
+	if crossOrg(s.Identity, ident) && !o.AllowCrossOrg && !o.Compact {
+		return "", &CrossOrgError{From: s.Identity.Label(s.Profile), To: ident.Label(account)}
 	}
 	var pid int
 	var state string
 	if err := store.UpdateSession(p, s.ID, func(x *store.Session) {
-		x.SwitchTo, x.SwitchForce = account, force
+		x.SwitchTo, x.SwitchForce, x.SwitchCompact = account, o.Force, o.Compact
 		pid, state = x.WrapperPID, x.State
 	}); err != nil {
 		return "", err
@@ -96,7 +116,7 @@ func Switch(p paths.Paths, ref, account string, force bool) (string, error) {
 	if pid > 0 {
 		_ = syscall.Kill(pid, syscall.SIGUSR1)
 	}
-	if force || state == store.StateIdle {
+	if o.Force || state == store.StateIdle {
 		return "switching now", nil
 	}
 	return "will switch when the current turn finishes", nil
@@ -123,7 +143,7 @@ func (w *wrapper) start(l *live, acct accounts.Account, resume bool) error {
 		s.Profile, s.Identity, s.AccountKey = acct.Name, ident, ident.Key(acct.Name)
 		s.NoteAccount(s.AccountKey, time.Now())
 		s.State = store.StateStarting
-		s.SwitchTo, s.SwitchForce = "", false
+		s.SwitchTo, s.SwitchForce, s.SwitchCompact = "", false, false
 	})
 	cmd := w.command(acct, resume)
 	if err := cmd.Start(); err != nil {
@@ -158,7 +178,7 @@ func (w *wrapper) maybeSwitch(l *live) {
 		return
 	}
 	clear := func() {
-		_ = store.UpdateSession(w.r.P, w.id, func(x *store.Session) { x.SwitchTo, x.SwitchForce = "", false })
+		_ = store.UpdateSession(w.r.P, w.id, func(x *store.Session) { x.SwitchTo, x.SwitchForce, x.SwitchCompact = "", false, false })
 	}
 	// Settings may have changed since the request; check again right before acting.
 	target, ident, err := validateTarget(w.r.P, w.root, s.SwitchTo, project.Load(w.r.P, w.root))
@@ -173,6 +193,14 @@ func (w *wrapper) maybeSwitch(l *live) {
 	}
 	from := l.acct
 	l.stop()
+	// Within one organization the earlier thinking stays usable, so there is
+	// nothing to gain from summarising.
+	if s.SwitchCompact && !sameOrg(accounts.ResolveIdentity(from.ConfigDir), ident) {
+		w.say("compacting the session under %s before the switch…", from.Name)
+		if err := w.compact(from); err != nil {
+			w.say("could not compact (%v); switching anyway", err)
+		}
+	}
 	if err := w.start(l, target, true); err != nil {
 		w.say("could not start under %s (%v); back on %s", target.Name, err, from.Name)
 		if err := w.start(l, from, true); err != nil {

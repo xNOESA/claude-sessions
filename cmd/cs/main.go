@@ -18,8 +18,8 @@ const helpText = `usage: cs <command>
   cs status [--once] [--json] [--all] [--no-refresh] [--no-black]
   cs account add|login|list|remove [name]
   cs new [-a account] [-n name] [--prompt text] [-- claude flags]
-  cs resume [session] [-a account] [--force] [-- claude flags]
-  cs switch <session> <account> [--force]
+  cs resume [session] [-a account] [--compact] [--force] [-- claude flags]
+  cs switch <session> <account> [--compact] [--yes] [--force]
   cs project set <key> <value> | show
   cs version
 `

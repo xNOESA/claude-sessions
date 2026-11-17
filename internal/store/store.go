@@ -83,6 +83,7 @@ type Session struct {
 	Tasks                                      TaskProgress
 	SwitchTo                                   string
 	SwitchForce                                bool
+	SwitchCompact                              bool // summarise under the old account before the switch
 	// Spans records which account the session ran under from when, so its
 	// usage can be attributed after it moves between accounts.
 	Spans []AccountSpan `json:",omitempty"`

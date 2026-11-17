@@ -8,6 +8,7 @@
 #   <config dir>/failstart  -> launch exits 1 at once
 #   <config dir>/usage.json -> body of the get_usage answer
 #   FAKE_USAGE_HANG         usage probe never answers
+#   FAKE_COMPACT_EXIT       exit code of a headless (-p) run
 cfg="${CLAUDE_CONFIG_DIR:-$CS_CLAUDE_DIR}"
 if [ "$1" = auth ]; then
   if [ "$2" = status ]; then
@@ -29,6 +30,13 @@ case " $* " in *" --input-format "*)
   printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":%s}}\n' "$rid" "$body"
   exit 0 ;;
 esac
+# Headless run: `claude -p --resume <id>` with a slash command on stdin, as cs
+# uses to compact a session before moving it to another organization.
+if [ "$1" = "-p" ]; then
+  read -r line || true
+  echo "HEADLESS|CONFIG=$CLAUDE_CONFIG_DIR|STDIN=$line|ARGV=$*" >> "${FAKE_LOG:-/dev/null}"
+  exit "${FAKE_COMPACT_EXIT:-0}"
+fi
 id=""; prev=""
 for a in "$@"; do
   case "$prev" in --session-id|--resume) id="$a" ;; esac

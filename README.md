@@ -56,8 +56,8 @@ cs
 | `cs account list` | Accounts, who each is signed in as, and whether the login is current. |
 | `cs account remove <name>` | Sign out and delete the account's directory. Shared history is untouched. |
 | `cs new [-a account] [-n name] [--prompt text] [-- claude flags]` | Start a session in the current directory. |
-| `cs resume [session] [-a account] [--force] [-- claude flags]` | Continue a session under any account. With no session, pick from this project's. |
-| `cs switch <session> <account> [--force]` | Move a running session to another account. Waits for the current turn to finish unless forced. |
+| `cs resume [session] [-a account] [--compact] [--force] [-- claude flags]` | Continue a session under any account. With no session, pick from this project's. |
+| `cs switch <session> <account> [--compact] [--yes] [--force]` | Move a running session to another account. Waits for the current turn to finish unless forced. See "Switching between organizations". |
 | `cs project show` / `cs project set <key> <value>` | Optional settings for the current project. |
 
 Flags after `--` go to `claude` and are repeated every time the session is
@@ -68,6 +68,31 @@ first message with `--prompt`; it is sent once. `cs` sets `--resume`,
 A session is named by its id, the start of its id, or its name. With no
 `-a`, `cs` uses the account the session last ran under, then the project's
 default, then asks.
+
+## Switching between organizations
+
+Claude's thinking is bound to the organization that produced it. When a
+session moves to an account in another organization, the conversation
+carries over but Claude cannot reuse its earlier thinking there: it shows a
+"can't use thinking from another organization" notice, and its next replies
+are slower and use more tokens. Accounts in the same organization are not
+affected, and moving the session back makes the thinking usable again.
+
+`cs` knows each account's organization, so:
+
+- Switching within an organization just happens.
+- `cs switch` to another organization stops and asks first. Answer at the
+  prompt, or pass one of:
+  - `--compact` summarises the session under the current account before
+    the move, so no earlier thinking is left behind. It costs one
+    summarising request on the current account and, like any compact,
+    trades detail for a shorter history. If that account has no usage left
+    the compact fails; `cs` says so and switches anyway.
+  - `--yes` switches as it is and accepts the notice.
+- `cs resume -a <account>` into another organization prints a note;
+  `--compact` works there too.
+- When `cs` asks which account to resume under, each is marked as the same
+  or another organization.
 
 ## The dashboard
 

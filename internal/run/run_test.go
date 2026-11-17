@@ -457,7 +457,7 @@ func TestPromptOnlyOnFirstLaunch(t *testing.T) {
 	s, _ := f.startAsync(func() int {
 		return f.r.New(Opts{Account: "default", Prompt: "fix the bug", ClaudeArgs: []string{"--model", "opus"}})
 	})
-	if _, err := Switch(f.p, s.ID, "work", false); err != nil {
+	if _, err := Switch(f.p, s.ID, "work", SwitchOpts{AllowCrossOrg: true}); err != nil {
 		t.Fatal(err)
 	}
 	l := f.waitLaunches(2, 8*time.Second)
